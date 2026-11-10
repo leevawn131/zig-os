@@ -82,6 +82,10 @@ REQUIRED_STRINGS=(
     "[CPU] Architecture: x86_64"
     "[KERNEL] Zig kernel entry reached."
     "[MEMORY] Bootloader memory map received."
+    "[IDT] 256 interrupt gates configured and verified."
+    "[PMM] Physical frame allocator initialized and verified."
+    "[VMM] 4-level paging and translation primitives verified."
+    "[HEAP] Dynamic memory allocator initialized and verified."
     "[STATUS] Kernel initialization complete."
     "zig-os:~$"
 )

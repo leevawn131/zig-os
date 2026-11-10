@@ -27,14 +27,17 @@ flowchart LR
 
 ---
 
-## Phase 1: Core Kernel Infrastructure
-- [ ] **GDT**: 64-bit Global Descriptor Table setup with Kernel Code, Kernel Data, User Code, User Data, and TSS.
-- [ ] **IDT & Exceptions**: Interrupt Descriptor Table with 32 CPU exception handlers, Page Fault decoding, and register state dumping.
-- [ ] **Interrupt Controller**: Advanced Programmable Interrupt Controller (APIC) initialization and Legacy PIC masking.
-- [ ] **Physical Memory Manager (PMM)**: Bitmap or Buddy allocator parsing Limine memory map entries and managing free physical frames.
-- [ ] **Virtual Memory Manager (VMM)**: 4-level page table manipulator, kernel address space mapping, and HHDM translation.
-- [ ] **Kernel Heap Allocator**: Slab / pool / buddy allocator for dynamic kernel allocations.
-- [ ] **Linear Framebuffer Console**: Text rendering over Limine framebuffer for screen output.
+## Phase 1: Core Kernel Infrastructure (Current - Status: COMPLETE)
+- [x] **GDT Management**: Preserved and documented Limine 64-bit kernel descriptors (CS: `0x28`, DS: `0x30`), with dynamic selector querying for IDT gates.
+- [x] **IDT & 256 Gates**: Full 256-entry Interrupt Descriptor Table with 64-bit Interrupt Gate descriptors and `packed struct(u80)` IDTR.
+- [x] **ISR Assembly Stubs**: 256 assembly vector stubs handling error codes vs dummy error codes, saving 15 GPRs, clearing direction flag (`cld`), and calling Zig dispatcher.
+- [x] **CPU Exception Handlers**: Exception dispatch with full diagnostic logging for vectors 0..31, controlled non-fatal test hooks, and safe `hltLoop` on unrecoverable faults.
+- [x] **Page Fault Diagnostics (#PF)**: CR2 faulting linear address reading and bitfield decoding (Present, Write/Read, User/Supervisor, Reserved bit, Instruction fetch NX).
+- [x] **SSE / FPU Enablement**: Configured CR0 (cleared EM, set MP) and CR4 (OSFXSR, OSXMMEXCPT) for reliable compiler SIMD code execution.
+- [x] **Physical Memory Manager (PMM)**: Bitmap physical frame allocator, parsing Limine memory map and HHDM offset, reserving bootloader/kernel regions, 4 KiB `allocPage`/`allocPages`/`freePage`/`freePages`, with double-free protection.
+- [x] **Virtual Memory Manager (VMM)**: 4-level paging (PML4, PDPT, PD, PT), page mapping (`mapPage`), unmapping (`unmapPage`), translation (`virtToPhys`), and TLB invalidation (`invlpg`).
+- [x] **Kernel Heap Allocator**: Production-quality segregated/coalescing dynamic heap allocator backed by PMM & VMM, memory bounds validation, header canaries (`0xCAFEBABE`), invalid free and double-free detection, and Zig `std.mem.Allocator` adapter.
+- [x] **Automated Verification**: Host-side unit tests (`tests/unit_test.zig`), controlled in-kernel exception dispatch tests, controlled page fault tests, PMM alloc/free tests, VMM mapping tests, Heap allocation tests, and QEMU smoke test suites.
 
 ---
 

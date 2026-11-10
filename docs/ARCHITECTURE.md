@@ -8,52 +8,57 @@ ZIG-OS is a production-oriented, freestanding 64-bit operating system developed 
 - **Host OS**: Ubuntu Linux / POSIX compliant host.
 - **Kernel Language**: Zig 0.17.1.
 - **Freestanding Mode**: Kernel executes without libc or host OS dependencies.
-- **No C/C++ in Kernel**: All kernel modules, drivers, protocol bindings, and data structures are written in pure Zig. Minimal assembly is restricted to low-level architecture-specific operations.
+- **No C/C++ in Kernel**: All kernel modules, drivers, protocol bindings, and data structures are written in pure Zig. Assembly is restricted to low-level ISR vector stubs and CPU instructions.
 - **Bootloader**: Limine 12.9.6 adhering to the official Limine Boot Protocol.
 - **Linker**: LLVM LLD via the Zig build system.
-- **Target ABI**: x86-64 System V ABI without floating point / vector registers and with the 128-byte red zone disabled (`-mno-red-zone`).
-- **Memory Layout**: Higher-half kernel mapped at `-2 GiB` (`0xffffffff80000000`).
+- **Target ABI**: x86-64 System V ABI with the 128-byte red zone disabled (`-mno-red-zone`), SSE/FPU enabled via CR0/CR4.
+- **Memory Layout**: Higher-half kernel mapped at `-2 GiB` (`0xffffffff80000000`), Higher Half Direct Map (HHDM) for physical memory access.
 
 ---
 
-## 2. Boot Flow & Protocol Contract
+## 2. CPU & Interrupt Subsystem (Phase 1)
 
-The boot process leverages Limine 12.9.6 in 64-bit long mode. The Limine bootloader locates the boot entry in `boot/limine/limine.conf`, sets up basic 4-level paging, loads the kernel ELF segments, parses the kernel's request tags, and jumps to the kernel entry point.
+### 2.1 GDT Rationale & Selector Management
+Limine 12.9.6 prepares a valid 64-bit flat GDT prior to kernel entry:
+- Code Segment Selector: `0x28` (Ring 0, 64-bit code)
+- Data Segment Selector: `0x30` (Ring 0, 64-bit data)
+
+In accordance with Phase 1 design requirements, Limine's GDT is documented and preserved during Phase 1 kernel mode execution. IDT gates dynamically query `getCs()` to eliminate hardcoded selector dependencies. A custom GDT with a Task State Segment (TSS) will be loaded in Phase 2 for Ring 3 privilege transitions.
+
+### 2.2 IDT & Assembly ISR Stubs
+- **256 Interrupt Gates**: Fully populated with 64-bit Interrupt Gate descriptors (`0x8E` = Present, DPL 0, 64-bit Interrupt Gate).
+- **IDTR Register**: Defined as `packed struct(u80)` (16-bit limit at offset 0, 64-bit base at offset 2, total 10 bytes).
+- **Error Code Normalization**:
+  - Vectors 8, 10, 11, 12, 13, 14, 17, 21, 29, 30 push a CPU hardware error code.
+  - All other vectors push a dummy error code `0`.
+  - Stubs push vector number, 15 general-purpose registers (RAX..R15), clear the Direction Flag (`cld`), and invoke `x86_64_interrupt_dispatch(&frame)`.
 
 ```mermaid
-sequenceDiagram
-    participant Firmware as BIOS/UEFI Firmware
-    participant Limine as Limine 12.9.6
-    participant KernelELF as ELF Linker / Image
-    participant Entry as kernel/src/main.zig (_start)
-    participant Serial as COM1 UART Driver
-
-    Firmware->>Limine: Boot stage handoff
-    Limine->>KernelELF: Inspect .limine_requests & markers
-    Limine->>KernelELF: Load segments at 0xffffffff80000000
-    Limine->>KernelELF: Populate responses (memmap, hhdm, etc.)
-    Limine->>Entry: Transfer execution to _start
-    Entry->>Entry: Disable interrupts (cli)
-    Entry->>Serial: Initialize 16550 UART (115200 8N1)
-    Entry->>Serial: Verify base revision support
-    Entry->>Serial: Log banner & boot status markers
-    Entry->>Entry: Enter quiescent CPU halt loop (hlt)
+flowchart TD
+    CPU["CPU Interrupt / Exception Event"] --> S1{"Does vector push<br/>hardware error code?"}
+    S1 -- Yes --> S2["Push vector number"]
+    S1 -- No --> S3["Push dummy 0 error code<br/>Push vector number"]
+    S2 --> Common["isr_common:<br/>Push 15 GPRs (RAX..R15)<br/>Pass %rsp to %rdi (InterruptFrame)<br/>cld<br/>call x86_64_interrupt_dispatch"]
+    S3 --> Common
+    Common --> Dispatch{"x86_64_interrupt_dispatch"}
+    Dispatch -- Controlled Test Hook --> Resume["Adjust frame.rip (if needed)<br/>Return from dispatch"]
+    Dispatch -- Unhandled Exception --> Diag["Log CPU Registers & CR2<br/>Execute cpu.haltLoop()"]
+    Resume --> Restore["Pop 15 GPRs<br/>Add 16 to %rsp (pop vector & err)<br/>iretq"]
 ```
 
-### Limine Request Protocol Details
-Requests are placed between start and end markers inside the writable `.data` section:
-1. `requests_start_marker`: 4 64-bit magic numbers (`0xf6b8f4b39de7d1ae`, `0xfab91a6940fcb9cf`, `0x785c6ed015d3e316`, `0x181e920a7852b9d9`).
-2. `base_revision`: Tag requesting Base Revision 3 (`0xf9562b2d5c95a6c8`, `0x6a7b384944536bdc`, `3`). On success, the bootloader zeroes the 3rd element.
-3. Feature requests:
-   - `memmap_request`: Requests the physical memory map.
-   - `hhdm_request`: Requests the Higher Half Direct Map offset.
-   - `bootloader_info_request`: Requests bootloader name and version.
-   - `stack_size_request`: Requests 64 KiB initial stack.
-4. `requests_end_marker`: 2 64-bit magic numbers (`0xadc0e0531bb10d03`, `0x9572709f31764c62`).
+### 2.3 Page Fault Diagnostics (#PF, Vector 14)
+When a page fault occurs:
+- The faulting linear address is retrieved from the `CR2` register.
+- The error code is decoded into semantic fields:
+  - Bit 0 (`P`): Page-protection violation vs. non-present page.
+  - Bit 1 (`W/R`): Write access vs. read access.
+  - Bit 2 (`U/S`): User mode vs. supervisor/kernel mode.
+  - Bit 3 (`RSVD`): Reserved bit set in page table entry.
+  - Bit 4 (`I/D`): Instruction fetch violation (NX).
 
 ---
 
-## 3. Kernel Virtual Memory Layout
+## 3. Memory Architecture (Phase 1)
 
 ```
 +------------------------------------+ 0xffffffffffffffff
@@ -62,53 +67,36 @@ Requests are placed between start and end markers inside the writable `.data` se
 |  - .rodata (R)                     |
 |  - .data / .bss / requests (RW)    |
 +------------------------------------+ 0xffffffff80000000
-| ...                                |
+| Dedicated Dynamic Kernel Heap      | 0xffff900000000000 - 0xffff900004000000 (64 MiB max)
 +------------------------------------+
-| Higher Half Direct Map (HHDM)      | (Direct mapping of physical RAM)
-| Base determined by bootloader      |
+| Higher Half Direct Map (HHDM)      | (Direct 1:1 virtual mapping of all physical RAM)
+| Base provided by Limine            |
 +------------------------------------+
 | User Space (Phase 2+)              | 0x0000000000000000 - 0x00007fffffffffff
 +------------------------------------+ 0x0000000000000000
 ```
 
----
+### 3.1 Physical Memory Manager (PMM)
+- **Bitmap Allocator**: Tracks all physical 4 KiB frames using a byte bitmap placed in the first sufficiently large usable physical memory region.
+- **Classification**:
+  - Memory below 1 MiB (0x0..0x100000) is locked/reserved for hardware compatibility.
+  - All non-USABLE regions (reserved, ACPI, bad memory, bootloader-reclaimable, kernel image) are marked as 1 (USED).
+  - The bitmap's own physical frame range is explicitly marked as USED to prevent self-overwrite.
+- **Double-Free Detection**: If `freePage` encounters a bit already marked 0, an immediate panic is raised.
+- **Security & Determinism**: All allocated pages are zeroed before being handed to callers.
 
-## 4. Subsystem Layout
+### 3.2 Virtual Memory Manager (VMM)
+- **4-Level Paging**: PML4 (L4) -> PDPT (L3) -> PD (L2) -> PT (L1).
+- **HHDM Translation**: All table accesses use `physToVirt(paddr) = paddr + hhdm_offset`.
+- **Primitives**:
+  - `mapPage(pml4, virt, phys, flags)`: Automatically allocates intermediate tables from PMM.
+  - `unmapPage(pml4, virt)`: Clears PT entry and executes `invlpg`.
+  - `virtToPhys(pml4, virt)`: Traverses page hierarchy supporting 4 KiB, 2 MiB, and 1 GiB page entries.
 
-```
-kernel/
-  ├── linker.ld               # ELF layout definition
-  └── src/
-      ├── main.zig            # Entry point & boot orchestration
-      ├── panic.zig           # Freestanding panic handler
-      ├── limine.zig          # Typed Limine protocol structures
-      ├── arch/
-      │   └── x86_64/
-      │       ├── cpu.zig     # Inb/outb, cli/sti, hlt instructions
-      │       ├── gdt/        # Global Descriptor Table (Phase 1)
-      │       └── idt/        # Interrupt Descriptor Table (Phase 1)
-      ├── drivers/
-      │   ├── serial/
-      │   │   └── serial.zig  # 16550 UART driver
-      │   └── framebuffer/    # Graphical console (Phase 1)
-      ├── mm/
-      │   ├── physical.zig    # Bitmap/Buddy PMM (Phase 1)
-      │   ├── virtual.zig     # Page table manager (Phase 1)
-      │   └── heap.zig        # Kernel slab/buddy allocator (Phase 1)
-      ├── process/            # Process control blocks (Phase 2)
-      ├── scheduler/          # Task scheduler (Phase 2)
-      ├── syscall/            # System call interface (Phase 2)
-      └── lib/                # Utility data structures
-```
-
----
-
-## 5. Serial Driver & Diagnostics
-
-The serial driver interacts with COM1 at standard I/O port `0x3F8`:
-- Clock divisor set to `1` (115200 baud).
-- Line control configured to 8 data bits, 1 stop bit, no parity (8N1).
-- 16-byte FIFO enabled and cleared.
-- Hardware loopback diagnostic executed during `init()` to verify transceiver presence.
-- Output polling with status register checks ensuring zero dropped characters.
-- Custom panic handler dumps error cause and return address directly to COM1 before halting the CPU.
+### 3.3 Kernel Heap Allocator
+- **Segregated / Coalescing Dynamic Allocator**:
+  - Blocks contain a 32-byte header with a verification canary (`0xCAFEBABE`) and state magic (`0x55534544` / `0x46524545`).
+  - Automatic block splitting for minimal internal fragmentation.
+  - Bidirectional coalescing on `deallocate()` when adjacent blocks are free.
+  - On-demand expansion: allocates physical frames from PMM and maps them into the heap window via VMM.
+  - Implements the standard Zig `std.mem.Allocator` interface.

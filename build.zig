@@ -17,6 +17,8 @@ pub fn build(b: *std.Build) void {
         .red_zone = false,
     });
 
+    kernel_mod.addAssemblyFile(b.path("kernel/src/arch/x86_64/interrupts/stubs.s"));
+
     const kernel = b.addExecutable(.{
         .name = "kernel.elf",
         .root_module = kernel_mod,
@@ -48,6 +50,18 @@ pub fn build(b: *std.Build) void {
     // Smoke Test Step
     const test_cmd = b.addSystemCommand(&.{ "bash", "scripts/test-boot.sh" });
     test_cmd.step.dependOn(iso_step);
-    const test_step = b.step("test-boot", "Run automated boot smoke test");
-    test_step.dependOn(&test_cmd.step);
+    const boot_test_step = b.step("test-boot", "Run automated boot smoke test");
+    boot_test_step.dependOn(&test_cmd.step);
+
+    // Host Unit Test Step
+    const unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/unit_test.zig"),
+            .target = b.resolveTargetQuery(.{}),
+            .optimize = optimize,
+        }),
+    });
+    const run_unit_tests = b.addRunArtifact(unit_tests);
+    const unit_test_step = b.step("test", "Run host unit tests");
+    unit_test_step.dependOn(&run_unit_tests.step);
 }
