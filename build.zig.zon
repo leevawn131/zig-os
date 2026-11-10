@@ -1,0 +1,14 @@
+.{
+    .name = .zig_os,
+    .fingerprint = 0x65216be1e50586a8,
+    .version = "0.1.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "kernel",
+        "boot",
+        "scripts",
+        "docs",
+    },
+}

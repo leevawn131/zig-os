@@ -1,0 +1,13 @@
+# Build outputs
+.zig-cache/
+zig-out/
+build/
+
+# Compiled host binaries
+boot/limine/limine
+boot/limine/limine.exe
+
+# Temporary files and logs
+*.log
+*.tmp
+.DS_Store
