@@ -1,10 +1,22 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const x86 = std.Target.x86;
     const target = b.resolveTargetQuery(.{
         .cpu_arch = .x86_64,
         .os_tag = .freestanding,
         .abi = .none,
+        .cpu_features_sub = x86.featureSet(&[_]x86.Feature{
+            .x87,
+            .mmx,
+            .sse,
+            .sse2,
+            .avx,
+            .avx2,
+        }),
+        .cpu_features_add = x86.featureSet(&[_]x86.Feature{
+            .soft_float,
+        }),
     });
 
     const optimize = b.standardOptimizeOption(.{});

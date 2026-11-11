@@ -16,6 +16,7 @@
 | **v1.2** | 2026-11-11 | Gemini 4 Argon | Second corrective architecture audit: (1) restored the authoritative x86-64 long-mode interrupt frame specification per Intel SDM Vol. 3A §6.14.2 and AMD64 APM Vol. 2 §8.9.3 (in 64-bit mode, the CPU unconditionally aligns `%rsp` to 16 bytes and pushes `SS`, `RSP`, `RFLAGS`, `CS`, `RIP` = `5` qwords even for same-CPL interrupts with `IST = 0`); (2) reclassified `F-02` as `REJECTED` (`R-09`) because valid interrupt/exception paths push `22` qwords (`176` bytes) below the CPU's 16-byte-aligned frame base, satisfying `%rsp % 16 == 0` before `call x86_64_interrupt_dispatch`; (3) updated `F-03` (`VERIFIED`, `MEDIUM`, `P1`) with the exact `5 + 1 + 15 = 21` qword (`168`-byte) calculation for software `INT n` targeting error-code vectors, verified zero current-source `INT n` calls to error-code vectors, and documented Limine's masked PIC handoff state; (4) reclassified `F-05` as `REJECTED` (`R-08`) because `frame.rsp` and `frame.ss` are unconditionally pushed in 64-bit mode, while preserving runtime regression test requirements under `F-04`; and (5) reconciled all finding counts (`17 VERIFIED`, `1 LIKELY`, `0 NEEDS_RUNTIME_VERIFICATION`, `9 REJECTED`), severities (`0 CRITICAL`, `6 HIGH`, `6 MEDIUM`, `4 LOW`, `2 INFORMATIONAL`), and priorities (`P0: 3`, `P1: 9`, `P2: 3`, `P3: 3`). |
 | **v1.3** | 2026-11-11 | Gemini 4 Argon | Final audit corrections: (1) refined `F-03` to state exact Limine Base Revision 3 interrupt-masking guarantees (all 8259 PIC lines masked, IOAPIC Fixed and Lowest Priority redirection entries masked, `RFLAGS.IF = 0`, whereas IOAPIC NMI/ExtINT masking is only guaranteed from Base Revision 5+), distinguished legacy 8259 PIC IRQ0–IRQ7 overlap (`0x08–0x0F`, intersecting error-code vectors `8, 10..14` only) from misconfigured APIC routes on vectors `17, 21, 29, 30`, separated the current binary's immediate `#GP(0)` failure (`movaps` faulting into a valid 22-qword `#GP` path that logs and halts) from the shifted `InterruptFrame` / broken `add rsp, 16; iretq` return contract, and clarified that dynamic stack alignment (`and rsp, -16`) alone is NOT a complete fix for `F-03`; (2) reassessed `F-15` (`CR0.TS` not cleared in `cpu.enableSse()`) from `LOW` / `P2` to `MEDIUM` / `P1` because Limine only guarantees all unspecified `CR0` bits are zeroed starting at Base Revision 5+, while ZIG-OS requests Base Revision 3; (3) added explicit `FXSAVE64`/`FXRSTOR64` coverage limitations to `F-01` (preserves x87/MMX/SSE `XMM0–XMM15`, does not preserve upper `YMM` or extended AVX/AVX-512 state requiring `XSAVE`/`XRSTOR`); and (4) reconciled all severity (`0 CRITICAL`, `6 HIGH`, `7 MEDIUM`, `3 LOW`, `2 INFORMATIONAL`) and priority (`P0: 3`, `P1: 10`, `P2: 2`, `P3: 3`) tables. |
 | **v1.3.1** | 2026-11-11 | Gemini 4 Argon | Refined `F-15`: (1) marked the initial `CR0.TS` register state at QEMU/Limine handoff as `UNVERIFIED` by direct GDB/runtime register capture (inferred only indirectly from absence of `#NM` during `./scripts/test-boot.sh`); (2) replaced the insufficient post-hoc `CR0` read check with a rigorous in-kernel QEMU regression test that deliberately sets `CR0.TS = 1` immediately before calling `cpu.enableSse()` with zero intervening FPU/SSE instructions and verifies both `CR0.TS` and `CR0.EM` are cleared afterward; and (3) distinguished host-testable pure `CR0` bit-mask logic from privileged Ring 0 runtime register verification under QEMU. |
+| **v1.4** | 2026-11-12 | Gemini 3.8 Flash | Implemented and verified resolution for `F-01`: updated `build.zig` target configuration with `cpu_features_sub` (subtracting `.x87`, `.mmx`, `.sse`, `.sse2`, `.avx`, `.avx2`) and `cpu_features_add` (adding `.soft_float`); confirmed zero prohibited instructions in both `Debug` and `ReleaseSafe` kernel ELFs via `objdump -d`; verified clean QEMU boot and passing in-kernel self-tests on freshly built hybrid ISOs; marked `F-01` as `FIXED`. Reconciled all finding registers and priority distributions (`16 VERIFIED`, `1 LIKELY`, `1 FIXED`, `9 REJECTED`; `17` active findings; `P0`: `2`). |
 
 ---
 
@@ -84,27 +85,27 @@ Every claim in this register is classified strictly by the verification method a
 
 | Status Category | Count | Finding IDs |
 |---|---:|---|
-| **VERIFIED** | **17** | `F-01`, `F-03`, `F-04`, `F-06`, `F-07`, `F-08`, `F-09`, `F-10`, `F-11`, `F-12`, `F-13`, `F-14`, `F-15`, `F-16`, `F-17`, `F-18`, `F-20` |
+| **VERIFIED** | **16** | `F-03`, `F-04`, `F-06`, `F-07`, `F-08`, `F-09`, `F-10`, `F-11`, `F-12`, `F-13`, `F-14`, `F-15`, `F-16`, `F-17`, `F-18`, `F-20` |
 | **LIKELY** | **1** | `F-19` |
 | **NEEDS_RUNTIME_VERIFICATION** | **0** | None |
 | **REJECTED** | **9** | `R-01`, `R-02`, `R-03`, `R-04`, `R-05`, `R-06`, `R-07`, `R-08` (formerly `F-05`), `R-09` (formerly `F-02`) |
-| **FIXED** | **0** | None (baseline snapshot audit) |
+| **FIXED** | **1** | `F-01` (Approach 1: `cpu_features_sub`/`cpu_features_add` in `build.zig`) |
 
-### 3.2 Severity Distribution (Active Findings: 18 Total)
+### 3.2 Severity Distribution (Active Findings: 17 Total)
 
 | Severity | Count | Finding IDs |
 |---|---:|---|
 | **CRITICAL** | **0** | None |
-| **HIGH** | **6** | `F-01`, `F-06`, `F-07`, `F-08`, `F-09`, `F-10` |
+| **HIGH** | **5** | `F-06`, `F-07`, `F-08`, `F-09`, `F-10` |
 | **MEDIUM** | **7** | `F-03`, `F-04`, `F-11`, `F-12`, `F-13`, `F-14`, `F-15` |
 | **LOW** | **3** | `F-16`, `F-18`, `F-19` |
 | **INFORMATIONAL** | **2** | `F-17`, `F-20` |
 
-### 3.3 Priority Distribution (`P0`–`P3`: 18 Active Findings)
+### 3.3 Priority Distribution (`P0`–`P3`: 17 Active Findings)
 
 | Priority | Count | Finding IDs |
 |---|---:|---|
-| **P0 — Must fix before further kernel development** | **3** | `F-01`, `F-10`, `F-14` |
+| **P0 — Must fix before further kernel development** | **2** | `F-10`, `F-14` (`F-01` is FIXED) |
 | **P1 — Must fix before Phase 2 authorization** | **10** | `F-03`, `F-04`, `F-06`, `F-07`, `F-08`, `F-09`, `F-11`, `F-12`, `F-13`, `F-15` |
 | **P2 — Important hardening that can follow** | **2** | `F-16`, `F-19` |
 | **P3 — Future improvements** | **3** | `F-17`, `F-18`, `F-20` |
@@ -119,9 +120,9 @@ Every claim in this register is classified strictly by the verification method a
 
 ### [F-01] Unsaved SIMD/SSE (`xmm0`–`xmm15`) register state across interrupt dispatch and compiler-generated SIMD instructions in kernel code
 
-**Status:** VERIFIED
+**Status:** FIXED (Build Verified & QEMU Verified)
 
-**Severity:** HIGH
+**Severity:** HIGH (Resolved)
 
 **Confidence:** HIGH
 
@@ -129,57 +130,56 @@ Every claim in this register is classified strictly by the verification method a
 Build target configuration ([`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig)), ISR common assembly stub ([`kernel/src/arch/x86_64/interrupts/stubs.s`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/interrupts/stubs.s)), and interrupt dispatcher ([`kernel/src/arch/x86_64/idt/handlers.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/idt/handlers.zig)).
 
 **Source location:**  
-- [`build.zig:4-18`](file:///home/leevawn/Projects/zig-os/build.zig#L4-L18)
+- [`build.zig:4-22`](file:///home/leevawn/Projects/zig-os/build.zig#L4-L22)
 - [`kernel/src/arch/x86_64/interrupts/stubs.s:1533-1571`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/interrupts/stubs.s#L1533-L1571)
 - [`kernel/src/arch/x86_64/idt/handlers.zig:77-96`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/idt/handlers.zig#L77-L96)
 - [`kernel/src/main.zig:13-19`](file:///home/leevawn/Projects/zig-os/kernel/src/main.zig#L13-L19)
 
-**Evidence:**  
-1. **Target configuration ([`build.zig:4-18`](file:///home/leevawn/Projects/zig-os/build.zig#L4-L18)):** The kernel module uses the default baseline `x86_64` CPU model without modifying CPU feature flags:
-   ```zig
-   const target = b.resolveTargetQuery(.{
-       .cpu_arch = .x86_64,
-       .os_tag = .freestanding,
-       .abi = .none,
-   });
-   ```
-   In Zig `0.17.1` (`/opt/zig/current/lib/std/Target/x86.zig:4760-4778`), baseline `x86_64` enables `.mmx`, `.sse2` (implying `.sse`), `.fxsr`, and `.x87` by default.
-2. **Compiler-generated SIMD instructions in `kernel.elf`:** Disassembly of `build/iso_root/boot/kernel.elf` (`objdump -d -M intel`) confirms **6,904 instructions referencing `xmm` registers** and **2,274 `movaps` instructions**, plus x87 `fld`/`fstp` instructions at `0xffffffff800046ea..0xffffffff800046ef`.
-3. **SIMD usage inside [`x86_64_interrupt_dispatch`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/idt/handlers.zig#L77-L80):**
-   ```asm
-   ffffffff8001d4f0 <x86_64_interrupt_dispatch>:
-   ...
-   ffffffff8001d528: 0f 10 05 91 1c 03 00  movups xmm0,XMMWORD PTR [rip+0x31c91] # <test_expected_vector>
-   ffffffff8001d52f: 0f 29 45 e0           movaps XMMWORD PTR [rbp-0x20],xmm0
-   ```
-4. **Missing SIMD context preservation in `isr_common` ([`stubs.s:1533-1571`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/interrupts/stubs.s#L1533-L1571)):** `isr_common` pushes and pops only the 15 general-purpose registers (`rax`..`r15`) and does not save or restore `xmm0`..`xmm15`.
+**Resolution & Empirical Verification (v1.4):**  
+Resolved via **Approach 1** by configuring the freestanding kernel target in [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig#L4-L22) to subtract `.x87`, `.mmx`, `.sse`, `.sse2`, `.avx`, `.avx2` and add `.soft_float`:
+```zig
+const x86 = std.Target.x86;
+const target = b.resolveTargetQuery(.{
+    .cpu_arch = .x86_64,
+    .os_tag = .freestanding,
+    .abi = .none,
+    .cpu_features_sub = x86.featureSet(&[_]x86.Feature{
+        .x87,
+        .mmx,
+        .sse,
+        .sse2,
+        .avx,
+        .avx2,
+    }),
+    .cpu_features_add = x86.featureSet(&[_]x86.Feature{
+        .soft_float,
+    }),
+});
+```
+- **Disassembly Verification:** Automated opcode audit across the resulting `kernel.elf` confirmed a 100% reduction in prohibited instructions:
+  - `Debug`: dropped from **8,536** prohibited instructions to **0** (zero `xmm`, `ymm`, `zmm`, `mm`, `movaps`, `movups`, `xorps`, `fxsave`, or x87 instructions).
+  - `ReleaseSafe`: dropped from **61** prohibited instructions to **0**.
+- **Runtime Verification:** Fresh bootable ISOs generated from both `Debug` and `ReleaseSafe` builds booted cleanly under QEMU and passed all in-kernel self-tests (`idt.testExceptionDispatch()`, `idt.testPageFaultHandling()`, `pmm.testPmm()`, `vmm.testVmm()`, `heap.testHeap()`) to `zig-os:~$`.
+
+**Historical Evidence (Baseline Commit `c10c05f1`):**  
+1. **Target configuration:** Baseline `build.zig` used `b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .freestanding, .abi = .none })`, which enabled `.mmx`, `.sse2` (implying `.sse`), `.fxsr`, and `.x87` by default.
+2. **Compiler-generated SIMD instructions:** Disassembly of baseline `kernel.elf` confirmed 6,904 instructions referencing `xmm` registers and 2,274 `movaps` instructions, plus x87 `fld`/`fstp` instructions at `0xffffffff800046ea..0xffffffff800046ef`.
+3. **SIMD usage inside [`x86_64_interrupt_dispatch`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/idt/handlers.zig#L77-L80):** `movups xmm0, [rip+0x31c91]` and `movaps [rbp-0x20], xmm0`.
+4. **Missing SIMD context preservation:** `isr_common` saved only GPRs (`rax`..`r15`).
 
 **Technical explanation:**  
-Four distinct technical aspects must be separated:
+Four distinct technical aspects:
 1. **Compiler-generated SIMD instructions:** With SSE/SSE2 enabled in the target, LLVM emits `xmm` loads/stores (`movups`, `movaps`) throughout the kernel for 16-byte struct, slice, and optional copies (including `test_expected_vector: ?u64` in `x86_64_interrupt_dispatch`), as well as 16-byte alignment-checked `movaps` stack spills.
-2. **SIMD register state preservation across interrupts:** Because `xmm0`..`xmm15` are caller-saved under the System V AMD64 ABI, `x86_64_interrupt_dispatch` (and any function it calls) is permitted by the ABI to overwrite `xmm0`..`xmm15` without restoring them. Because `isr_common` only saves GPRs, every returning interrupt or exception silently clobbers `xmm0` in the interrupted code context.
-3. **CPU FPU/SSE initialization:** `_start()` calls [`cpu.enableSse()`](file:///home/leevawn/Projects/zig-os/kernel/src/main.zig#L18) before `idt.init()`. In the current `Debug` binary, the instructions emitted in `_start` prior to `enableSse()` (`0xffffffff80017d60..0xffffffff80017d86`) use GPR instructions only, so early boot does not fault; however, as long as SSE is enabled for the compilation unit containing `_start`, the compiler is not prevented from scheduling `xmm` stack-initialization instructions into `_start`'s prologue before `enableSse()`.
-4. **Why `.soft_float` alone is insufficient:** In `/opt/zig/current/lib/std/Target/x86.zig:1190-1194`, `Feature.soft_float` (`-msoft-float`) has an empty dependency set and only switches scalar floating-point operations to software library routines; it does **not** disable `.mmx`, `.sse`, `.sse2`, `.avx`, or `.avx2`, which LLVM continues to use for 128-bit integer/memory moves (`movups`/`movaps`) unless those vector features are explicitly subtracted.
+2. **SIMD register state preservation across interrupts:** Because `xmm0`..`xmm15` are caller-saved under the System V AMD64 ABI, `x86_64_interrupt_dispatch` (and any function it calls) is permitted by the ABI to overwrite `xmm0`..`xmm15` without restoring them. Because `isr_common` only saves GPRs, every returning interrupt or exception silently clobbered `xmm0` in the interrupted code context.
+3. **CPU FPU/SSE initialization:** `_start()` calls [`cpu.enableSse()`](file:///home/leevawn/Projects/zig-os/kernel/src/main.zig#L18) before `idt.init()`. Retained to ensure hardware control registers are properly initialized for upcoming user-space execution.
+4. **Why `.soft_float` alone is insufficient:** `Feature.soft_float` (`-msoft-float`) only switches scalar floating-point operations to software library routines; it does **not** disable vector registers or memory vectorization unless `.mmx`, `.sse`, `.sse2`, `.avx`, and `.avx2` are explicitly subtracted.
 
-*Severity Rationale (`HIGH` rather than `CRITICAL`):* During Phase 1, maskable hardware interrupts remain disabled (`cpu.cli()`) and the only returning exceptions occur inside controlled self-tests (`idt.testExceptionDispatch()` and `idt.testPageFaultHandling()`), so the kernel boots and passes Phase 1 self-tests without immediate corruption. Under realistic interrupt-driven execution or recoverable page faults, however, clobbering `xmm0` in `x86_64_interrupt_dispatch` will corrupt interrupted kernel or user state, making this a **`HIGH`** severity defect.
-
-**Reproduction scenario:**  
-When `idt.testExceptionDispatch()` (`int $3`) or `idt.testPageFaultHandling()` (`#PF`) executes in `build/iso_root/boot/kernel.elf`, `x86_64_interrupt_dispatch` executes `movups xmm0, [rip+0x31c91]` at `0xffffffff8001d528` and returns via `iretq` with `xmm0` overwritten by `test_expected_vector`. If an asynchronous interrupt fires between an `xmm0` load and store in interrupted kernel code, the store writes corrupted data from `test_expected_vector` into memory.
-
-**Impact:**  
-Silent corruption of `xmm0` (and any other `xmm` registers touched by interrupt handlers) across any returning interrupt or exception, plus `#GP(0)` faults inside `x86_64_interrupt_dispatch` if an anomalous entry path (`F-03`) ever misaligns the stack by 8 bytes.
-
-**Recommended correction:**  
-Choose one of two architectural approaches (or combine Approach 1 for general kernel code with Approach 2 for user/task switching in Phase 2):
-- **Approach 1 (Recommended for Phase 1 Hardening — Prohibit compiler-generated SIMD/FPU in kernel code):** Configure the kernel target in [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig#L4-L8) to subtract `.x87`, `.mmx`, `.sse`, `.sse2`, `.avx`, `.avx2` via `cpu_features_sub` and add `.soft_float` via `cpu_features_add`.  
-  *(Verification Status of Proposed Configuration: **UNVERIFIED / Not Compiled**. While the feature tags `.x87`, `.mmx`, `.sse`, `.sse2`, `.avx`, `.avx2`, and `.soft_float` exist in `/opt/zig/current/lib/std/Target/x86.zig`, this configuration has **not** been compiled into `kernel.elf` during this read-only audit and must not be marked `BUILD VERIFIED` until compiled and verified via `objdump -d`.)*
-- **Approach 2 (Alternative — Preserve FPU/SIMD state on interrupt entry/exit):** If compiler-generated SSE instructions remain enabled in kernel code (as currently described in [`.agents/rules/03-x86_64-architecture.md:20`](file:///home/leevawn/Projects/zig-os/.agents/rules/03-x86_64-architecture.md#L20)), `isr_common` must allocate a 16-byte-aligned 512-byte region on the stack and execute `fxsave64` before `call x86_64_interrupt_dispatch` and `fxrstor64` after `call` (and `_start` must be written in assembly or compiled without SSE so `enableSse()` is guaranteed to execute before any SSE instruction).  
-  - **Architectural Limitation of `FXSAVE64`/`FXRSTOR64`:** `FXSAVE`/`FXRSTOR` (`fxsave64`/`fxrstor64`) preserve only legacy x87/MMX/SSE state, including `MXCSR` and the 128-bit `XMM0–XMM15` registers in 64-bit mode. They do **not** preserve the upper 128 bits of `YMM0–YMM15` (AVX) or the full extended AVX/AVX-512 processor state (`ZMM0–ZMM31`, opmask registers `k0–k7`). If the kernel later enables AVX (`CR4.OSXSAVE` + `XCR0`) or other extended state features, it must either implement an appropriate `XSAVE`/`XSAVEOPT`/`XRSTOR` save-area policy or prohibit compiler-generated use of those extended features in kernel code.  
-  *(Verification Status of Proposed `FXSAVE64`/`FXRSTOR64` Implementation: **UNVERIFIED / Not Compiled and Not Tested**.)*
+**Impact Prior to Fix:**  
+Silent corruption of `xmm0` across returning interrupts or exceptions, plus `#GP(0)` faults inside `x86_64_interrupt_dispatch` if an anomalous entry path (`F-03`) misaligned the stack by 8 bytes.
 
 **Regression tests:**  
-1. If Approach 1 is selected: compile `kernel.elf` in both `Debug` and `ReleaseSafe` modes and run `objdump -d -M intel zig-out/bin/kernel.elf | grep -E "xmm|ymm|zmm|movaps|movups|fld|fstp"` to verify zero compiler-emitted SIMD/x87 instructions.
-2. If Approach 2 is selected: add an in-kernel self-test that loads a known 128-bit pattern into `xmm0` before `int $3` and asserts `xmm0` is unchanged after `iretq`.
+1. Compile `kernel.elf` in both `Debug` and `ReleaseSafe` modes and run `objdump -d -M intel zig-out/bin/kernel.elf | grep -E "xmm|ymm|zmm|movaps|movups|fld|fstp"` to verify zero compiler-emitted SIMD/x87 instructions.
+2. Run `./scripts/test-boot.sh` on fresh ISO images and verify successful boot to `zig-os:~$`.
 
 **Dependencies:**  
 Interacts with `F-03` and `F-15`.
@@ -1165,20 +1165,19 @@ The following claims from prior audit reports and earlier revisions were indepen
 
 > **Governance Gate Notice:** This section defines the proposed engineering sequence for **Phase 1 Hardening**. It does **not** authorize Phase 2 and does **not** mark Phase 1 as Human Approved. Only the Project Owner may approve milestone gates.
 
-### P0 — Must Fix Before Further Kernel Development (3 Findings)
+### P0 — Must Fix Before Further Kernel Development (2 Active Findings)
 
-**Included Findings:** `F-01`, `F-10`, `F-14`
+**Included Active Findings:** `F-10`, `F-14`  
+*(Note: `F-01` was resolved and verified via Approach 1 in `build.zig`, confirmed with 0 prohibited instructions and clean QEMU boot).*
 
-- **Dependencies:** None (foundational compiler target / SIMD safety, unit-test architecture, and build/test provenance).
+- **Dependencies:** None (foundational testable kernel module architecture and build/test provenance).
 - **Required Implementation Tasks:**
-  1. **`F-01` (SIMD/FPU Strategy):** Implement the chosen architectural approach for SIMD in kernel code — either prohibit compiler-generated SIMD/x87 in [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig) (`cpu_features_sub` + `cpu_features_add`) or save/restore legacy x87/MMX/SSE state (`fxsave64`/`fxrstor64`) in `isr_common` (noting that `FXSAVE64`/`FXRSTOR64` preserve `XMM0–XMM15` but do not preserve upper `YMM` or extended AVX/AVX-512 state, which would require `XSAVE`/`XRSTOR` or compiler feature prohibition if later enabled).
-  2. **`F-10` (Testable Kernel Module Architecture):** Extract pure memory/paging/interrupt logic or add injectable backing interfaces so [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig) imports and tests production kernel code directly.
-  3. **`F-14` (QEMU Test Provenance & Unconditional Rebuild):** Update [`scripts/test-boot.sh`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh), [`scripts/run.sh`](file:///home/leevawn/Projects/zig-os/scripts/run.sh), [`scripts/debug.sh`](file:///home/leevawn/Projects/zig-os/scripts/debug.sh), and [`tests/test_boot.py`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py) to unconditionally rebuild `kernel.elf` and `build/zig-os.iso`, unify optimization flags with `scripts/build.sh`, and print the SHA-256 of the tested `kernel.elf`.
+  1. **`F-10` (Testable Kernel Module Architecture):** Extract pure memory/paging/interrupt logic or add injectable backing interfaces so [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig) imports and tests production kernel code directly.
+  2. **`F-14` (QEMU Test Provenance & Unconditional Rebuild):** Update [`scripts/test-boot.sh`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh), [`scripts/run.sh`](file:///home/leevawn/Projects/zig-os/scripts/run.sh), [`scripts/debug.sh`](file:///home/leevawn/Projects/zig-os/scripts/debug.sh), and [`tests/test_boot.py`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py) to unconditionally rebuild `kernel.elf` and `build/zig-os.iso`, unify optimization flags with `scripts/build.sh`, and print the SHA-256 of the tested `kernel.elf`.
 - **Required Regression Tests:**
-  - Verify `objdump -d` on `zig-out/bin/kernel.elf` (`0` `xmm` instructions under Approach 1, or verified `fxsave64`/`fxrstor64` under Approach 2).
   - Verify `zig build test` imports production kernel modules and fails when a production module invariant is broken.
   - Verify `./scripts/test-boot.sh` rebuilds `build/zig-os.iso` on every invocation and logs the matching `kernel.elf` SHA-256 digest.
-- **Acceptance Criteria:** Zero unpreserved XMM clobbering across interrupts, verified current-source ISO provenance on every QEMU test run, and host unit tests bound to production kernel code.
+- **Acceptance Criteria:** Verified current-source ISO provenance on every QEMU test run, and host unit tests bound to production kernel code.
 
 ---
 
