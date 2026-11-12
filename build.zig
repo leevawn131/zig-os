@@ -150,6 +150,25 @@ pub fn build(b: *std.Build) void {
         .root_module = test_mod,
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
+
+    // Stateful PMM Core Host Unit Tests (wired into the same `zig build test` step)
+    const pmm_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/pmm_test.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
+    pmm_test_mod.addAnonymousImport("physical_core", .{
+        .root_source_file = b.path("kernel/src/mm/physical_core.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
+    const pmm_tests = b.addTest(.{
+        .name = "pmm_test",
+        .root_module = pmm_test_mod,
+    });
+    const run_pmm_tests = b.addRunArtifact(pmm_tests);
+
     const unit_test_step = b.step("test", "Run host unit tests");
     unit_test_step.dependOn(&run_unit_tests.step);
+    unit_test_step.dependOn(&run_pmm_tests.step);
 }

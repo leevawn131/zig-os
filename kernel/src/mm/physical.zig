@@ -1,9 +1,8 @@
-// Physical Memory Manager (PMM)
-// Production-quality bitmap physical frame allocator
-const std = @import("std");
+// Physical Memory Manager (PMM) Kernel Adapter
+// Binds Limine memory map, HHDM translation, and panic contracts to the shared PMM core.
 const limine = @import("../limine.zig");
-const serial = @import("../drivers/serial/serial.zig");
 const physical_math = @import("physical_math.zig");
+const physical_core = @import("physical_core.zig");
 
 pub const PAGE_SIZE: u64 = physical_math.PAGE_SIZE;
 pub const totalPagesFromBytes = physical_math.totalPagesFromBytes;
@@ -22,7 +21,7 @@ pub var used_pages: usize = 0;
 pub var free_pages: usize = 0;
 pub var highest_address: u64 = 0;
 
-var last_scanned_byte: usize = 0;
+var core: physical_core.PhysicalAllocator = .{};
 
 pub inline fn physToVirt(paddr: u64) [*]u8 {
     return @ptrFromInt(paddr + hhdm_offset);
@@ -32,22 +31,50 @@ pub inline fn virtToPhys(vaddr: usize) u64 {
     return vaddr - hhdm_offset;
 }
 
-inline fn isBitSet(frame: usize) bool {
-    const byte_idx = physical_math.frameToByteIndex(frame);
-    const bit_idx = physical_math.frameToBitIndex(frame);
-    return (bitmap[byte_idx] & (@as(u8, 1) << bit_idx)) != 0;
+const LimineRegionContext = struct {
+    entry_count: usize,
+    entries: [*]const *const limine.MemmapEntry,
+};
+
+fn limineRegionCount(ctx: *const anyopaque) usize {
+    const view: *const LimineRegionContext = @ptrCast(@alignCast(ctx));
+    return view.entry_count;
 }
 
-inline fn setBit(frame: usize) void {
-    const byte_idx = physical_math.frameToByteIndex(frame);
-    const bit_idx = physical_math.frameToBitIndex(frame);
-    bitmap[byte_idx] |= (@as(u8, 1) << bit_idx);
+fn limineRegionGet(ctx: *const anyopaque, index: usize) physical_core.MemoryRegion {
+    const view: *const LimineRegionContext = @ptrCast(@alignCast(ctx));
+    const entry = view.entries[index];
+    return .{
+        .base = entry.base,
+        .length = entry.length,
+        .kind = if (entry.type == .usable) .usable else .non_usable,
+    };
 }
 
-inline fn clearBit(frame: usize) void {
-    const byte_idx = physical_math.frameToByteIndex(frame);
-    const bit_idx = physical_math.frameToBitIndex(frame);
-    bitmap[byte_idx] &= ~(@as(u8, 1) << bit_idx);
+fn acquireKernelBitmap(_: ?*anyopaque, bitmap_phys: u64, size_bytes: usize) physical_core.InitError![]u8 {
+    return physToVirt(bitmap_phys)[0..size_bytes];
+}
+
+fn zeroKernelPages(_: ?*anyopaque, paddr: u64, page_count: usize) void {
+    @memset(physToVirt(paddr)[0..(page_count * PAGE_SIZE)], 0);
+}
+
+inline fn syncGlobals() void {
+    bitmap = core.bitmap.ptr;
+    bitmap_size_bytes = core.bitmap.len;
+    total_pages = core.total_pages;
+    usable_pages = core.usable_pages;
+    used_pages = core.used_pages;
+    free_pages = core.free_pages;
+    highest_address = core.highest_address;
+}
+
+fn panicOnFreeError(err: physical_core.FreeError, comptime unaligned_msg: []const u8) noreturn {
+    switch (err) {
+        error.UnalignedAddress => @panic(unaligned_msg),
+        error.OutOfBounds => @panic("PMM: Physical address out of tracked bounds"),
+        error.DoubleFree => @panic("PMM: Double-free detected on physical page"),
+    }
 }
 
 pub fn init() void {
@@ -55,194 +82,67 @@ pub fn init() void {
     hhdm_offset = hhdm.offset;
 
     const memmap = limine.memmap_request.response orelse @panic("PMM: Limine memory map response missing");
+    const region_ctx: LimineRegionContext = .{
+        .entry_count = @intCast(memmap.entry_count),
+        .entries = memmap.entries,
+    };
 
-    // Scan memory map to find highest physical address
-    highest_address = 0;
-    var total_usable_bytes: u64 = 0;
+    core.init(
+        .{
+            .ctx = &region_ctx,
+            .countFn = limineRegionCount,
+            .getFn = limineRegionGet,
+        },
+        .{
+            .ctx = null,
+            .acquireFn = acquireKernelBitmap,
+        },
+        .{
+            .ctx = null,
+            .zeroFn = zeroKernelPages,
+        },
+    ) catch |err| switch (err) {
+        error.NoUsableBitmapRegion => @panic("PMM: Failed to locate usable physical memory for allocation bitmap"),
+        error.BitmapBackingTooSmall => @panic("PMM: Allocation bitmap backing smaller than required"),
+    };
 
-    for (0..memmap.entry_count) |i| {
-        const entry = memmap.entries[i];
-        const entry_top = entry.base + entry.length;
-        if (entry_top > highest_address) {
-            highest_address = entry_top;
-        }
-        if (entry.type == .usable) {
-            total_usable_bytes += entry.length;
-        }
-    }
-
-    total_pages = physical_math.totalPagesFromBytes(highest_address);
-    bitmap_size_bytes = physical_math.bitmapSizeBytes(total_pages);
-
-    // Find a usable region with enough space to hold the allocation bitmap
-    var bitmap_phys: ?u64 = null;
-    for (0..memmap.entry_count) |i| {
-        const entry = memmap.entries[i];
-        if (entry.type == .usable and entry.length >= bitmap_size_bytes and entry.base != 0) {
-            bitmap_phys = entry.base;
-            break;
-        }
-    }
-
-    if (bitmap_phys == null) {
-        @panic("PMM: Failed to locate usable physical memory for allocation bitmap");
-    }
-
-    bitmap = physToVirt(bitmap_phys.?);
-
-    // Default: Mark all physical frames as 1 (USED / RESERVED)
-    @memset(bitmap[0..bitmap_size_bytes], 0xFF);
-
-    // Mark exclusively USABLE ranges as 0 (FREE)
-    usable_pages = 0;
-    for (0..memmap.entry_count) |i| {
-        const entry = memmap.entries[i];
-        if (entry.type == .usable) {
-            const start_frame: usize = physical_math.totalPagesFromBytes(entry.base);
-            const end_frame: usize = physical_math.physToFrame(entry.base + entry.length);
-
-            var frame = start_frame;
-            while (frame < end_frame and frame < total_pages) : (frame += 1) {
-                // Keep the first 1 MiB / page 0 reserved for legacy BIOS/hardware stability
-                if (frame * PAGE_SIZE < 0x100000) {
-                    continue;
-                }
-                clearBit(frame);
-                usable_pages += 1;
-            }
-        }
-    }
-
-    // Reserve the memory pages occupied by the bitmap itself
-    const bitmap_start_frame: usize = physical_math.physToFrame(bitmap_phys.?);
-    const bitmap_end_frame: usize = physical_math.totalPagesFromBytes(bitmap_phys.? + bitmap_size_bytes);
-
-    var b_frame = bitmap_start_frame;
-    while (b_frame < bitmap_end_frame and b_frame < total_pages) : (b_frame += 1) {
-        setBit(b_frame);
-    }
-
-    // Recalculate accurate free and used counts
-    used_pages = 0;
-    free_pages = 0;
-    for (0..total_pages) |f| {
-        if (isBitSet(f)) {
-            used_pages += 1;
-        } else {
-            free_pages += 1;
-        }
-    }
+    syncGlobals();
 }
 
 pub fn allocPage() ?u64 {
-    var byte_idx = last_scanned_byte;
-    var scanned_bytes: usize = 0;
-
-    while (scanned_bytes < bitmap_size_bytes) : (scanned_bytes += 1) {
-        if (bitmap[byte_idx] != 0xFF) {
-            const byte = bitmap[byte_idx];
-            const bit_idx: u3 = @truncate(@ctz(~byte));
-            const frame = byte_idx * 8 + bit_idx;
-
-            if (frame < total_pages) {
-                setBit(frame);
-                used_pages += 1;
-                free_pages -= 1;
-                last_scanned_byte = byte_idx;
-
-                const paddr: u64 = @as(u64, @intCast(frame)) * PAGE_SIZE;
-
-                // Zero out the newly allocated page for security and deterministic behavior
-                @memset(physToVirt(paddr)[0..PAGE_SIZE], 0);
-                return paddr;
-            }
-        }
-
-        byte_idx += 1;
-        if (byte_idx >= bitmap_size_bytes) {
-            byte_idx = 0;
-        }
-    }
-
-    return null; // Out of memory
+    const paddr = core.allocPage();
+    syncGlobals();
+    return paddr;
 }
 
 pub fn allocPages(count: usize) ?u64 {
-    if (count == 0) return null;
-    if (count == 1) return allocPage();
-
-    var consecutive: usize = 0;
-    var start_frame: usize = 0;
-
-    for (0..total_pages) |frame| {
-        if (!isBitSet(frame)) {
-            if (consecutive == 0) {
-                start_frame = frame;
-            }
-            consecutive += 1;
-            if (consecutive == count) {
-                // Mark all `count` frames as used
-                for (start_frame..(start_frame + count)) |f| {
-                    setBit(f);
-                }
-                used_pages += count;
-                free_pages -= count;
-
-                const base_paddr: u64 = @as(u64, @intCast(start_frame)) * PAGE_SIZE;
-                @memset(physToVirt(base_paddr)[0..(count * PAGE_SIZE)], 0);
-                return base_paddr;
-            }
-        } else {
-            consecutive = 0;
-        }
-    }
-
-    return null; // Insufficient contiguous frames
+    const paddr = core.allocPages(count);
+    syncGlobals();
+    return paddr;
 }
 
 pub fn freePage(paddr: u64) void {
-    if (paddr % PAGE_SIZE != 0) {
-        @panic("PMM: Attempted to free unaligned physical address");
-    }
-
-    const frame: usize = physical_math.physToFrame(paddr);
-    if (frame >= total_pages) {
-        @panic("PMM: Physical address out of tracked bounds");
-    }
-
-    // Double-free prevention check
-    if (!isBitSet(frame)) {
-        @panic("PMM: Double-free detected on physical page");
-    }
-
-    clearBit(frame);
-    used_pages -= 1;
-    free_pages += 1;
-
-    const byte_idx = physical_math.frameToByteIndex(frame);
-    if (byte_idx < last_scanned_byte) {
-        last_scanned_byte = byte_idx;
-    }
+    core.freePage(paddr) catch |err| {
+        panicOnFreeError(err, "PMM: Attempted to free unaligned physical address");
+    };
+    syncGlobals();
 }
 
 pub fn freePages(paddr: u64, count: usize) void {
-    if (count == 0) return;
-    if (paddr % PAGE_SIZE != 0) {
-        @panic("PMM: Attempted to free unaligned physical range");
-    }
-
-    for (0..count) |i| {
-        freePage(paddr + @as(u64, @intCast(i)) * PAGE_SIZE);
-    }
+    core.freePages(paddr, count) catch |err| {
+        panicOnFreeError(err, "PMM: Attempted to free unaligned physical range");
+    };
+    syncGlobals();
 }
 
 pub fn isPageAllocated(paddr: u64) bool {
-    const frame: usize = physical_math.physToFrame(paddr);
-    if (frame >= total_pages) return true;
-    return isBitSet(frame);
+    return core.isPageAllocated(paddr);
 }
 
 pub fn testPmm() bool {
+    const initial_free = free_pages;
+    if (used_pages + free_pages != total_pages) return false;
+
     // Test 1: Single page allocation
     const p1 = allocPage() orelse return false;
     if (p1 % PAGE_SIZE != 0 or p1 == 0) return false;
@@ -272,6 +172,9 @@ pub fn testPmm() bool {
         if (!isPageAllocated(multi + @as(u64, @intCast(i)) * PAGE_SIZE)) return false;
     }
     freePages(multi, 4);
+
+    if (used_pages + free_pages != total_pages) return false;
+    if (free_pages != initial_free) return false;
 
     return true;
 }
