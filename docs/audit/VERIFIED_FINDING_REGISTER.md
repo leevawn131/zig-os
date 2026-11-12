@@ -1,8 +1,9 @@
 # ZIG-OS — Verified Finding Register & Phase 1 Hardening Plan
 
 > **Document Authority:** Principal Kernel Auditor & Documentation Architect (Gemini 4 Argon)  
-> **Target Snapshot:** `c10c05f1f37aacfda5046480a314f29d940b67ef` (`main`)  
-> **Audit Date:** 2026-11-11  
+> **Original Audit Baseline:** `c10c05f1f37aacfda5046480a314f29d940b67ef` (`main`)  
+> **Current Implementation Snapshot:** `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`main`)  
+> **Audit Date:** 2026-11-11 (Updated: 2026-11-12)  
 > **Scope:** Independent source, build-pipeline, and ELF binary verification for Phase 1 hardening.
 
 ---
@@ -15,8 +16,9 @@
 | **v1.1** | 2026-11-11 | Gemini 4 Argon | First corrective audit pass: recalibrated `F-01` (`CRITICAL` $\to$ `HIGH`), split `F-02`/`F-03`, `F-16`/`F-17`, and `F-19`/`F-20`, updated `F-04`, `F-08`, `F-10`, `F-14`, `F-18`. |
 | **v1.2** | 2026-11-11 | Gemini 4 Argon | Second corrective architecture audit: (1) restored the authoritative x86-64 long-mode interrupt frame specification per Intel SDM Vol. 3A §6.14.2 and AMD64 APM Vol. 2 §8.9.3 (in 64-bit mode, the CPU unconditionally aligns `%rsp` to 16 bytes and pushes `SS`, `RSP`, `RFLAGS`, `CS`, `RIP` = `5` qwords even for same-CPL interrupts with `IST = 0`); (2) reclassified `F-02` as `REJECTED` (`R-09`) because valid interrupt/exception paths push `22` qwords (`176` bytes) below the CPU's 16-byte-aligned frame base, satisfying `%rsp % 16 == 0` before `call x86_64_interrupt_dispatch`; (3) updated `F-03` (`VERIFIED`, `MEDIUM`, `P1`) with the exact `5 + 1 + 15 = 21` qword (`168`-byte) calculation for software `INT n` targeting error-code vectors, verified zero current-source `INT n` calls to error-code vectors, and documented Limine's masked PIC handoff state; (4) reclassified `F-05` as `REJECTED` (`R-08`) because `frame.rsp` and `frame.ss` are unconditionally pushed in 64-bit mode, while preserving runtime regression test requirements under `F-04`; and (5) reconciled all finding counts (`17 VERIFIED`, `1 LIKELY`, `0 NEEDS_RUNTIME_VERIFICATION`, `9 REJECTED`), severities (`0 CRITICAL`, `6 HIGH`, `6 MEDIUM`, `4 LOW`, `2 INFORMATIONAL`), and priorities (`P0: 3`, `P1: 9`, `P2: 3`, `P3: 3`). |
 | **v1.3** | 2026-11-11 | Gemini 4 Argon | Final audit corrections: (1) refined `F-03` to state exact Limine Base Revision 3 interrupt-masking guarantees (all 8259 PIC lines masked, IOAPIC Fixed and Lowest Priority redirection entries masked, `RFLAGS.IF = 0`, whereas IOAPIC NMI/ExtINT masking is only guaranteed from Base Revision 5+), distinguished legacy 8259 PIC IRQ0–IRQ7 overlap (`0x08–0x0F`, intersecting error-code vectors `8, 10..14` only) from misconfigured APIC routes on vectors `17, 21, 29, 30`, separated the current binary's immediate `#GP(0)` failure (`movaps` faulting into a valid 22-qword `#GP` path that logs and halts) from the shifted `InterruptFrame` / broken `add rsp, 16; iretq` return contract, and clarified that dynamic stack alignment (`and rsp, -16`) alone is NOT a complete fix for `F-03`; (2) reassessed `F-15` (`CR0.TS` not cleared in `cpu.enableSse()`) from `LOW` / `P2` to `MEDIUM` / `P1` because Limine only guarantees all unspecified `CR0` bits are zeroed starting at Base Revision 5+, while ZIG-OS requests Base Revision 3; (3) added explicit `FXSAVE64`/`FXRSTOR64` coverage limitations to `F-01` (preserves x87/MMX/SSE `XMM0–XMM15`, does not preserve upper `YMM` or extended AVX/AVX-512 state requiring `XSAVE`/`XRSTOR`); and (4) reconciled all severity (`0 CRITICAL`, `6 HIGH`, `7 MEDIUM`, `3 LOW`, `2 INFORMATIONAL`) and priority (`P0: 3`, `P1: 10`, `P2: 2`, `P3: 3`) tables. |
-| **v1.3.1** | 2026-11-11 | Gemini 4 Argon | Refined `F-15`: (1) marked the initial `CR0.TS` register state at QEMU/Limine handoff as `UNVERIFIED` by direct GDB/runtime register capture (inferred only indirectly from absence of `#NM` during `./scripts/test-boot.sh`); (2) replaced the insufficient post-hoc `CR0` read check with a rigorous in-kernel QEMU regression test that deliberately sets `CR0.TS = 1` immediately before calling `cpu.enableSse()` with zero intervening FPU/SSE instructions and verifies both `CR0.TS` and `CR0.EM` are cleared afterward; and (3) distinguished host-testable pure `CR0` bit-mask logic from privileged Ring 0 runtime register verification under QEMU. |
+| **v1.3.1** | 2026-11-11 | Gemini 4 Argon | Refined `F-15`: (1) marked the initial `CR0.TS` register state at QEMU/Limine handoff as `UNVERIFIED` by direct GDB/runtime register capture (inferred only indirectly from absence of `#NM` during `./scripts/test-boot.sh`); (2) replaced the insufficient post-hoc `CR0` read check with a rigorous in-kernel QEMU regression test that deliberately sets `CR0.TS = 1` immediately before calling `cpu.enableSse()` with zero intervening FPU/SSE instructions and verifies both `CR0.TS` and `CR0.EM` are cleared afterward; and (3) distinguished host-testable pure `CR0` bit-mask logic from privileged Ring 0 runtime verification under QEMU. |
 | **v1.4** | 2026-11-12 | Gemini 3.8 Flash | Implemented and verified resolution for `F-01`: updated `build.zig` target configuration with `cpu_features_sub` (subtracting `.x87`, `.mmx`, `.sse`, `.sse2`, `.avx`, `.avx2`) and `cpu_features_add` (adding `.soft_float`); confirmed zero prohibited instructions in both `Debug` and `ReleaseSafe` kernel ELFs via `objdump -d`; verified clean QEMU boot and passing in-kernel self-tests on freshly built hybrid ISOs; marked `F-01` as `FIXED`. Reconciled all finding registers and priority distributions (`16 VERIFIED`, `1 LIKELY`, `1 FIXED`, `9 REJECTED`; `17` active findings; `P0`: `2`). |
+| **v1.5** | 2026-11-12 | Gemini 4 Argon | Updated register for implementation snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` pure-module extraction): (1) recorded current implementation snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` alongside historical original audit baseline `c10c05f1f37aacfda5046480a314f29d940b67ef`; (2) documented `F-10A` completion (`paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig` shared between production kernel modules and `tests/unit_test.zig`), explicitly distinguishing independently reviewed source structure from agent-reported build (`Debug`/`ReleaseSafe`), host unit test (`7/7` passing), and fresh ISO/QEMU boot evidence; (3) updated `F-10` evidence to replace the obsolete claim that `tests/unit_test.zig` duplicates all helpers with zero production imports, while keeping `F-10` `OPEN` / `VERIFIED` / `P0` because `F-10B` (stateful PMM, VMM, and Heap core testability) remains pending; and (4) preserved `F-14` as `OPEN` / `VERIFIED` / `P0` and retained all finding counts (`16 VERIFIED`, `1 LIKELY`, `1 FIXED`, `9 REJECTED`; `17` active findings; active `P0`: `F-10`, `F-14`). |
 
 ---
 
@@ -24,35 +26,32 @@
 
 ### 1.1 Git Snapshot Identity
 
-| Attribute | Expected Value | Actual Verified Value | Match Status |
+| Attribute | Original Audit Baseline (`v1.0`–`v1.3.1`) | Current Implementation Snapshot (`v1.5`) | Match Status |
 |---|---|---|---|
 | **Repository** | `leevawn131/zig-os` | `leevawn131/zig-os` | **MATCH** |
-| **Branch** | `main` | `main` (`origin/main`) | **MATCH** |
-| **HEAD Commit SHA** | `c10c05f1f37aacfda5046480a314f29d940b67ef` | `c10c05f1f37aacfda5046480a314f29d940b67ef` | **EXACT MATCH** |
-| **Commit Subject** | `feat(kernel): implement Phase 1 core kernel infrastructure` | `feat(kernel): implement Phase 1 core kernel infrastructure` | **EXACT MATCH** |
-| **Commit Timestamp** | `2026-11-10` | `2026-11-10T14:10:11+07:00` | **EXACT MATCH** |
+| **Branch** | `main` (`origin/dev` baseline) | `main` (`origin/main`) | **MATCH** |
+| **HEAD Commit SHA** | `c10c05f1f37aacfda5046480a314f29d940b67ef` | `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` | **EXACT MATCH** |
+| **Commit Subject** | `feat(kernel): implement Phase 1 core kernel infrastructure` | `refactor(mm,arch): extract pure math and layout modules for host unit tests (F-10A)` | **EXACT MATCH** |
+| **Commit Timestamp** | `2026-11-10T14:10:11+07:00` | `2026-11-12T20:25:24+07:00` | **EXACT MATCH** |
+| **Intervening Source Commits** | — | `515aa91becaf772f3f5b9243f92c1c0828f5d0bc` (`F-01` fix), `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` refactor) | **VERIFIED** |
 
 ### 1.2 Working Tree & Build Artifact Status (`git status --short`)
 
+At current snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`:
 ```text
- M docs/ROADMAP.md
  M zig.zip
-?? .agents/
-?? AGENTS.md
-?? docs/ENGINEERING_GOVERNANCE.md
-?? docs/TESTING_POLICY.md
-?? docs/adr/
-?? docs/audit/
 ?? docs/md.zip
 ?? graphify-out/
 ```
 
-- **Kernel, Linker, Build, and Test Source Integrity:** Zero tracked files under [`kernel/`](file:///home/leevawn/Projects/zig-os/kernel), [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/`](file:///home/leevawn/Projects/zig-os/scripts), or [`tests/`](file:///home/leevawn/Projects/zig-os/tests) are modified in the working tree. All audited code and scripts match commit `c10c05f1f37aacfda5046480a314f29d940b67ef` byte-for-byte.
-- **Tracked Working-Tree Modifications (Non-Kernel):**
-  - [`docs/ROADMAP.md`](file:///home/leevawn/Projects/zig-os/docs/ROADMAP.md): Uncommitted governance edits adding the Phase 1.1 milestone gate table.
-  - `zig.zip`: Tracked binary archive modified locally in the working tree (untouched per governance rules).
-- **Untracked Governance & Documentation Files:** [`AGENTS.md`](file:///home/leevawn/Projects/zig-os/AGENTS.md), [`.agents/rules/`](file:///home/leevawn/Projects/zig-os/.agents/rules), [`docs/ENGINEERING_GOVERNANCE.md`](file:///home/leevawn/Projects/zig-os/docs/ENGINEERING_GOVERNANCE.md), [`docs/TESTING_POLICY.md`](file:///home/leevawn/Projects/zig-os/docs/TESTING_POLICY.md), [`docs/adr/`](file:///home/leevawn/Projects/zig-os/docs/adr), [`docs/audit/`](file:///home/leevawn/Projects/zig-os/docs/audit), `docs/md.zip`, and `graphify-out/`.
-- **Inspected Build Artifacts & ISO Provenance (Explicit Command Output):**
+- **Kernel, Linker, Build, and Test Source Integrity (`9df21f8`):** Zero tracked source files under [`kernel/`](file:///home/leevawn/Projects/zig-os/kernel), [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/`](file:///home/leevawn/Projects/zig-os/scripts), or [`tests/`](file:///home/leevawn/Projects/zig-os/tests) have uncommitted modifications. All tracked code and scripts match commit `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` byte-for-byte.
+- **Untouched Working-Tree Artifacts:** `zig.zip`, `docs/md.zip`, and `graphify-out/` remain untouched in the local workspace per governance safety rules.
+- **Agent-Reported Build Artifacts for `F-10A` (`9df21f8`):**
+  ```text
+  0704203edb046d847ad73bb8df3b5ef7d13118ee40a3204d1f6d96e33d47e964  zig-out/bin/kernel.elf
+  0335e152875e8cdc4b75cd33ea937cdbc1c9e639495dce8b55cb5a0b67d6e78b  build/zig-os.iso
+  ```
+- **Historical Baseline Build Artifacts (`c10c05f`, Inspected in `v1.0`–`v1.3.1`):**
   ```text
   $ xorriso -osirrox on -indev build/zig-os.iso -extract /boot/kernel.elf /tmp/iso_extracted_kernel.elf
   $ sha256sum zig-out/bin/kernel.elf build/iso_root/boot/kernel.elf /tmp/iso_extracted_kernel.elf
@@ -65,17 +64,14 @@
 
 ## 2. Verification Methodology & Executed Evidence Matrix
 
-Every claim in this register is classified strictly by the verification method actually performed during this audit:
+Every claim in this register is classified strictly by the verification method actually performed and its provenance:
 
-| Verification Tier | Executed in This Audit? | Command / Method | Empirical Result & Provenance |
+| Verification Tier | Executed / Provenance | Command / Method | Empirical Result & Provenance |
 |---|---|---|---|
-| **Static Source Inspection** | **YES** | Direct line-by-line review of all files in `kernel/`, `build.zig`, `scripts/`, `tests/`, `docs/`, and `/opt/zig/current/lib/std/Target/x86.zig` | Completed across 100% of kernel and build sources at `c10c05f1f37aacfda5046480a314f29d940b67ef`. |
-| **ELF & ISO Binary Inspection** | **YES** | `sha256sum`, `xorriso -extract`, `readelf -h -l -S -d`, `nm -n`, `objdump -d -M intel` on `build/iso_root/boot/kernel.elf` | Confirmed `/boot/kernel.elf` inside `build/zig-os.iso` matches `zig-out/bin/kernel.elf` (`19e69d10...`); verified 3 `PT_LOAD` segments (`R E`, `R`, `RW`), orphan `.got` section, Limine request ordering, and 6,904 `xmm` / 2,274 `movaps` instructions. |
-| **Host Unit Tests** | **YES** | `zig build test --summary all` and `zig test tests/unit_test.zig` | `All 5 tests passed` (exit code `0`). Confirmed tests only exercise local duplicate functions in [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig) (`F-10`). |
-| **Existing Pre-Built ISO Boot Test** | **YES** | `./scripts/test-boot.sh` | Passed (exit code `0`) booting the pre-existing `build/zig-os.iso` (containing `kernel.elf` `19e69d10...`). Because `scripts/test-boot.sh` skips rebuilding when `build/zig-os.iso` exists (`F-14`), this proves **existing ISO boot success**, **not** a fresh compilation of the current source tree. |
-| **Current-Source Build Verification** | **NO (Not Executed)** | `zig build` | Not executed during this read-only audit to avoid overwriting pre-existing artifacts in `zig-out/`. |
-| **Current-Source QEMU Boot Verification** | **NO (Not Executed)** | `zig build test-boot` | Not executed during this read-only audit; requires rebuilding `kernel.elf` and `build/zig-os.iso` from current source before booting QEMU. |
-| **Modified Kernel Compilation** | **NO (Not Executed)** | Prohibited by read-only kernel audit mandate | Proposed compiler/code configurations (such as `cpu_features_sub` in `F-01`) are marked **UNVERIFIED (Not Compiled)** and are **not** marked `BUILD VERIFIED`. |
+| **Static Source Inspection (`c10c05f` & `9df21f8`)** | **YES (Independently Audited)** | Direct line-by-line review of all files in `kernel/`, `build.zig`, `scripts/`, `tests/`, `docs/`, and `/opt/zig/current/lib/std/Target/x86.zig` | Completed across 100% of kernel and build sources at baseline `c10c05f1f37aacfda5046480a314f29d940b67ef` and re-verified at `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` shared modules `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig`). |
+| **ELF & ISO Binary Inspection (`c10c05f` & `515aa91`)** | **YES (Baseline Audited / `F-01` Agent-Reported)** | `sha256sum`, `xorriso -extract`, `readelf -h -l -S -d`, `nm -n`, `objdump -d -M intel` | At `c10c05f`, confirmed `/boot/kernel.elf` inside `build/zig-os.iso` matched `zig-out/bin/kernel.elf` (`19e69d10...`), 3 `PT_LOAD` segments (`R E`, `R`, `RW`), orphan `.got` section, Limine request ordering, and 6,904 `xmm` / 2,274 `movaps` instructions. At `515aa91` (`F-01`), implementation agent reported `0` prohibited SIMD/x87 instructions in `Debug` and `ReleaseSafe` ELFs. |
+| **Host Unit Tests (`c10c05f` vs. `9df21f8`)** | **Baseline Audited / `9df21f8` Source Reviewed & Agent-Reported** | `zig build test --summary all` and direct `zig test` with `--dep` module flags | At `c10c05f`, `5/5` tests passed against local duplicate functions in `tests/unit_test.zig`. At `9df21f8` (`F-10A`), static review confirms `tests/unit_test.zig` imports the 4 shared production modules (`paging_math`, `physical_math`, `page_fault`, `heap_layout`) with zero local duplicates; implementation agent reported `All 7 tests passed` (`7/7`). Stateful PMM/VMM/Heap logic remains untested on host (`F-10B`). |
+| **Build & QEMU Boot Verification (`c10c05f` vs. `9df21f8`)** | **Baseline Pre-Built ISO Audited / `9df21f8` Agent-Reported** | `zig build -Doptimize=Debug`, `zig build -Doptimize=ReleaseSafe`, `rm -rf build/ && ./scripts/build.sh iso`, `./scripts/test-boot.sh` | At `c10c05f`, `./scripts/test-boot.sh` booted pre-existing `build/zig-os.iso` (`19e69d10...`). At `9df21f8` (`F-10A`), implementation agent reported passing `Debug` and `ReleaseSafe` builds, fresh ISO generation (`0335e152...`, `kernel.elf` `0704203e...`), and `12/12` passing checks in `./scripts/test-boot.sh`. Direct script invocation without removing `build/zig-os.iso` still skips rebuilding (`F-14`). |
 
 ---
 
@@ -114,7 +110,7 @@ Every claim in this register is classified strictly by the verification method a
 
 ## 4. Finding Register (`F-01`–`F-20`)
 
-> **Source Version Note:** Every finding below applies to Git commit `c10c05f1f37aacfda5046480a314f29d940b67ef` (`2026-11-10`). Historical IDs `F-02` and `F-05` are retained in place with `Status: REJECTED` and cross-referenced to `R-09` and `R-08` in Section 5 to preserve full audit traceability.
+> **Source Version Note:** Findings were originally audited at baseline commit `c10c05f1f37aacfda5046480a314f29d940b67ef` (`2026-11-10`) and updated through current implementation snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`2026-11-12`, incorporating `515aa91` for `F-01` and `9df21f8` for `F-10A`). Historical IDs `F-02` and `F-05` are retained in place with `Status: REJECTED` and cross-referenced to `R-09` and `R-08` in Section 5 to preserve full audit traceability.
 
 ---
 
@@ -568,44 +564,62 @@ Related to `F-13`.
 
 ---
 
-### [F-10] Host unit test suite (`tests/unit_test.zig`) duplicates algorithms locally and lacks a testable kernel module architecture
+### [F-10] Host unit test suite (`tests/unit_test.zig`) lacks a testable kernel module architecture for stateful PMM, VMM, and Heap cores (`F-10A` pure-module extraction completed; `F-10B` pending)
 
-**Status:** VERIFIED
+**Status:** VERIFIED (`OPEN` — `F-10A` Pure-Module Extraction Completed at `9df21f8`; `F-10B` Stateful Core Testability Pending)
 
 **Severity:** HIGH
 
 **Confidence:** HIGH
 
 **Affected component:**  
-Host unit test suite ([`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig)), build configuration ([`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig)), and kernel module boundaries (`kernel/src/mm/`).
+Host unit test suite ([`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig)), build configuration ([`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig)), shared pure production modules ([`kernel/src/mm/paging_math.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/paging_math.zig), [`kernel/src/mm/physical_math.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_math.zig), [`kernel/src/arch/x86_64/interrupts/page_fault.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/interrupts/page_fault.zig), [`kernel/src/mm/heap_layout.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig)), and stateful kernel memory managers ([`kernel/src/mm/physical.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig), [`kernel/src/mm/virtual.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/virtual.zig), [`kernel/src/mm/heap.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig)).
 
 **Source location:**  
-- [`tests/unit_test.zig:1-120`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig#L1-L120)
-- [`build.zig:56-66`](file:///home/leevawn/Projects/zig-os/build.zig#L56-L66)
+- [`tests/unit_test.zig:1-222`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig#L1-L222)
+- [`build.zig:68-100`](file:///home/leevawn/Projects/zig-os/build.zig#L68-L100)
+- [`kernel/src/mm/paging_math.zig:1-30`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/paging_math.zig#L1-L30) and [`kernel/src/mm/virtual.zig:6-14, 38-155`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/virtual.zig#L6-L14)
+- [`kernel/src/mm/physical_math.zig:1-29`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_math.zig#L1-L29) and [`kernel/src/mm/physical.zig:6-119, 131-243`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L6-L119)
+- [`kernel/src/arch/x86_64/interrupts/page_fault.zig:1-20`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/interrupts/page_fault.zig#L1-L20) and [`kernel/src/arch/x86_64/idt/handlers.zig:5-7, 127-133`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/idt/handlers.zig#L5-L7)
+- [`kernel/src/mm/heap_layout.zig:1-14`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig#L1-L14) and [`kernel/src/mm/heap.zig:15-18, 34-210`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L15-L18)
 
 **Evidence:**  
-[`tests/unit_test.zig:6-20, 63-79, 107-115`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig#L6-L20) defines standalone copies of `pml4Index`, `pdptIndex`, `pdIndex`, `ptIndex`, `pageOffset`, `PageFaultCause`, and `BlockHeader` with zero `@import` references to `kernel/src/`.
+1. **Completed `F-10A` Pure-Module Extraction (Snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`):**
+   - **Independently Reviewed Source Structure:** Direct source inspection of commit `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` confirms that all previously duplicated pure functions and layout structures were extracted into four hardware-independent production modules under `kernel/src/` and wired into both the freestanding kernel and [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig):
+     - [`kernel/src/mm/paging_math.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/paging_math.zig): Defines `PAGE_SIZE`, `pml4Index`, `pdptIndex`, `pdIndex`, `ptIndex`, and `pageOffset`, imported and re-exported by [`kernel/src/mm/virtual.zig:6-14`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/virtual.zig#L6-L14).
+     - [`kernel/src/mm/physical_math.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_math.zig): Defines `PAGE_SIZE`, `totalPagesFromBytes`, `bitmapSizeBytes`, `physToFrame`, `frameToByteIndex`, and `frameToBitIndex`, imported and used across [`kernel/src/mm/physical.zig:6-119, 208-240`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L6-L119).
+     - [`kernel/src/arch/x86_64/interrupts/page_fault.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/interrupts/page_fault.zig): Defines `PageFaultCause` and `PageFaultCause.decode()`, imported and used by [`kernel/src/arch/x86_64/idt/handlers.zig:5-7, 127-133`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/idt/handlers.zig#L5-L7).
+     - [`kernel/src/mm/heap_layout.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig): Defines `BlockHeader` (`extern struct`, `@sizeOf(BlockHeader) == 40`, `@alignOf(BlockHeader) == 8`) and `HEADER_SIZE`, imported and re-exported by [`kernel/src/mm/heap.zig:15-18`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L15-L18).
+     - [`build.zig:68-100`](file:///home/leevawn/Projects/zig-os/build.zig#L68-L100) and [`tests/unit_test.zig:5-222`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig#L5-L222): `build.zig` exposes `paging_math`, `physical_math`, `page_fault`, and `heap_layout` via `test_mod.addAnonymousImport(...)`, and `tests/unit_test.zig` imports those four production modules directly with all local duplicate helper and struct definitions removed.
+   - **Agent-Reported Build & Runtime Evidence (`F-10A` at `9df21f8`):** The implementation agent reported:
+     - `7/7` host unit tests passing (`zig build test --summary all` and direct `zig test` execution).
+     - `Debug` (`zig build -Doptimize=Debug --summary all`) and `ReleaseSafe` (`zig build -Doptimize=ReleaseSafe --summary all`) freestanding kernel builds succeeding with zero warnings or errors.
+     - Fresh hybrid ISO (`build/zig-os.iso`, SHA-256 `0335e152875e8cdc4b75cd33ea937cdbc1c9e639495dce8b55cb5a0b67d6e78b`, packaging `zig-out/bin/kernel.elf` `0704203edb046d847ad73bb8df3b5ef7d13118ee40a3204d1f6d96e33d47e964`) booting cleanly under QEMU and passing all 12 checks in `./scripts/test-boot.sh`.
+2. **Remaining `F-10B` Stateful Hardware-Boundary Problem (Snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`):**
+   - While pure indexing and layout definitions are now shared (`F-10A`), the stateful allocation, mapping, and coalescing algorithms in [`kernel/src/mm/physical.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig), [`kernel/src/mm/virtual.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/virtual.zig), and [`kernel/src/mm/heap.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig) remain directly coupled to Limine global responses (`limine.hhdm_request`, `limine.memmap_request`), module-level globals (`hhdm_offset`, `bitmap`, `head_block`, `current_heap_end`), higher-half virtual addresses (`HEAP_START = 0xffff_9000_0000_0000`), and privileged CPU instructions (`cpu.readCr3()`, `cpu.invlpg()`), preventing them from being imported and exercised by host unit tests.
+3. **Historical Audit Evidence (Original Baseline `c10c05f1f37aacfda5046480a314f29d940b67ef`):**
+   - At original baseline `c10c05f1`, `tests/unit_test.zig:6-20, 63-79, 107-115` defined standalone local copies of `pml4Index`, `pdptIndex`, `pdIndex`, `ptIndex`, `pageOffset`, `PageFaultCause`, and `BlockHeader` with zero `@import` references to `kernel/src/` (remediated in `9df21f8b` by `F-10A`).
 
 **Technical explanation:**  
-`zig build test` only compiles and runs the local functions and structs pasted into `tests/unit_test.zig`; it never compiles or exercises any production file under `kernel/src/`. At the same time, production modules such as `kernel/src/mm/virtual.zig` and `kernel/src/mm/physical.zig` directly call privileged CPU instructions (`cpu.readCr3()`, `cpu.invlpg()`) or read global Limine response pointers (`limine.hhdm_request`, `limine.memmap_request`), which cannot execute blindly in a normal Linux host process without architectural separation.
+With `F-10A` complete at `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`, `zig build test` now compiles and exercises the four shared pure production modules (`paging_math.zig`, `physical_math.zig`, `page_fault.zig`, `heap_layout.zig`). However, `F-10` remains **OPEN (`VERIFIED`, `P0`)** because `F-10B` is not yet implemented: the stateful algorithms in `kernel/src/mm/physical.zig` (`init`, `allocPage`, `allocPages`, `freePage`, `freePages`), `kernel/src/mm/virtual.zig` (`mapPage`, `unmapPage`, `virtToPhys`), and `kernel/src/mm/heap.zig` (`init`, `expandHeap`, `allocate`, `deallocate`) directly access hardware control registers (`CR3`, `invlpg`), HHDM physical-to-virtual pointer offsets, and Limine bootloader globals. Without injectable/parameterized backing interfaces or separated stateful core structs (`F-10B`), `zig build test` still cannot compile or exercise `physical.zig`, `virtual.zig`, or `heap.zig` on the Linux host.
 
 **Reproduction scenario:**  
-Introducing a defect or syntax error in `kernel/src/mm/heap.zig`, `kernel/src/mm/physical.zig`, or `kernel/src/mm/virtual.zig` does not cause `zig build test` to fail (`3/3 steps succeeded`).
+Introducing a logic defect or syntax error inside the stateful functions of `kernel/src/mm/heap.zig` (e.g., `allocate`, `deallocate`, `expandHeap`), `kernel/src/mm/physical.zig` (e.g., `init`, `allocPage`, `freePage`), or `kernel/src/mm/virtual.zig` (e.g., `mapPage`, `unmapPage`) still does not cause `zig build test` to fail (`3/3 steps succeeded`), because `zig build test` only compiles the four extracted pure modules (`paging_math`, `physical_math`, `page_fault`, `heap_layout`).
 
 **Impact:**  
-`zig build test` provides zero regression coverage of actual kernel source files, while [`ADR-0004:38`](file:///home/leevawn/Projects/zig-os/docs/adr/0004-segregated-heap-allocator-canaries.md#L38) overstates what `tests/unit_test.zig` verifies.
+While pure math and struct layout regressions are now caught by `zig build test` (`F-10A`), stateful PMM, VMM, and Heap invariants (`F-06`–`F-09`, `F-11`–`F-13`) still lack host unit test coverage, and [`ADR-0004:38`](file:///home/leevawn/Projects/zig-os/docs/adr/0004-segregated-heap-allocator-canaries.md#L38) continues to overstate what `tests/unit_test.zig` verifies until `F-10B` is completed.
 
 **Recommended correction:**  
-Do **not** blindly import privileged hardware-touching code into host tests. Instead, refactor the kernel's memory and interrupt logic into a testable architecture using one or both of:
-1. **Pure logic & data-structure modules:** Place pure functions and layout types (`pml4Index`..`pageOffset`, `isCanonical`, `PageTable`, `IdtEntry`, `IdtDescriptor`, `InterruptFrame`, `PageFaultCause`, `BlockHeader`, bitmap bit operations) in hardware-independent kernel modules imported directly by both the freestanding kernel and `tests/unit_test.zig`.
-2. **Injectable / parameterized backends:** Allow `pmm`, `vmm`, and `heap` core algorithms to accept an explicit memory map slice, simulated HHDM base pointer, and no-op TLB flush hook during host unit tests while binding to `limine` and `cpu.zig` in the freestanding kernel build.
+Do **not** blindly import privileged hardware-touching code into host tests. Complete the two-part testable kernel architecture:
+1. **`F-10A` — Pure logic & data-structure modules (`COMPLETED` at `9df21f8`):** Extracted `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig` as hardware-independent production modules imported directly by both the freestanding kernel and `tests/unit_test.zig` (expandable with additional pure helpers such as `isCanonical` or `computeSseCr0` as `F-13`/`F-15` are implemented).
+2. **`F-10B` — Injectable / parameterized stateful backends (`PENDING`):** Refactor the stateful `pmm`, `vmm`, and `heap` core algorithms to operate over explicit state structs or compile-time-injected backing interfaces (accepting a caller-supplied memory map slice, simulated HHDM/backing buffer, and no-op TLB flush hook during host unit tests while binding to `limine` and `cpu.zig` in the freestanding kernel build).
 
 **Regression tests:**  
-1. Verify `tests/unit_test.zig` contains zero duplicated kernel struct/function definitions and directly imports the shared production kernel modules.
-2. Verify that breaking a production invariant in `mm/heap.zig`, `mm/physical.zig`, or `mm/virtual.zig` causes `zig build test` to fail.
+1. **Completed (`F-10A`):** Verify `tests/unit_test.zig` contains zero duplicated kernel struct/function definitions and directly imports the shared pure production modules (`paging_math`, `physical_math`, `page_fault`, `heap_layout`).
+2. **Pending (`F-10B`):** Verify that breaking a stateful production invariant in the PMM, VMM, or Heap core causes `zig build test` to fail.
 
 **Dependencies:**  
-Foundational `P0` requirement to enable host unit testing of `F-06`–`F-13`.
+Foundational `P0` requirement (`F-10B`) to enable host unit testing of stateful memory-management findings `F-06`–`F-09` and `F-11`–`F-13`.
 
 ---
 
@@ -778,7 +792,7 @@ Related to `F-09`.
 Build and smoke-test scripts ([`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/build.sh`](file:///home/leevawn/Projects/zig-os/scripts/build.sh), [`scripts/test-boot.sh`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh), [`scripts/run.sh`](file:///home/leevawn/Projects/zig-os/scripts/run.sh), [`scripts/debug.sh`](file:///home/leevawn/Projects/zig-os/scripts/debug.sh), [`tests/test_boot.py`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py)).
 
 **Source location:**  
-- [`build.zig:10, 32-54`](file:///home/leevawn/Projects/zig-os/build.zig#L32-L54)
+- [`build.zig:22, 44-67`](file:///home/leevawn/Projects/zig-os/build.zig#L44-L67)
 - [`scripts/build.sh:25-28`](file:///home/leevawn/Projects/zig-os/scripts/build.sh#L25-L28)
 - [`scripts/test-boot.sh:22-25`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh#L22-L25)
 - [`tests/test_boot.py:32-37`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py#L32-L37)
@@ -800,8 +814,8 @@ fi
 ```
 
 **Technical explanation:**  
-1. **Stale ISO execution on direct script invocation:** While `zig build test-boot` (`build.zig:50-54`) depends on `iso_step` $\to$ `b.getInstallStep()` and always rebuilds `kernel.elf` and `build/zig-os.iso`, invoking `./scripts/test-boot.sh` or `python3 tests/test_boot.py` directly (as instructed in [`docs/TESTING_POLICY.md:61,85`](file:///home/leevawn/Projects/zig-os/docs/TESTING_POLICY.md#L61)) checks `if [[ ! -f "${ISO}" ]]` and boots the pre-existing `build/zig-os.iso` without recompiling `kernel/src/`.
-2. **Audit provenance distinction:** During this audit, `/boot/kernel.elf` was extracted from `build/zig-os.iso` via `xorriso` and compared against the workspace build artifacts:
+1. **Stale ISO execution on direct script invocation:** While `zig build test-boot` (`build.zig:62-66`) depends on `iso_step` $\to$ `b.getInstallStep()` and always rebuilds `kernel.elf` and `build/zig-os.iso`, invoking `./scripts/test-boot.sh` or `python3 tests/test_boot.py` directly (as instructed in [`docs/TESTING_POLICY.md:61,85`](file:///home/leevawn/Projects/zig-os/docs/TESTING_POLICY.md#L61)) checks `if [[ ! -f "${ISO}" ]]` and boots the pre-existing `build/zig-os.iso` without recompiling `kernel/src/`.
+2. **Audit provenance distinction:** During the initial baseline audit (`c10c05f1`), `/boot/kernel.elf` was extracted from `build/zig-os.iso` via `xorriso` and compared against the workspace build artifacts:
    ```text
    $ xorriso -osirrox on -indev build/zig-os.iso -extract /boot/kernel.elf /tmp/iso_extracted_kernel.elf
    $ sha256sum zig-out/bin/kernel.elf build/iso_root/boot/kernel.elf /tmp/iso_extracted_kernel.elf
@@ -809,7 +823,7 @@ fi
    19e69d105af7bc95ffd07e9c2e00109797440c1ce92a82318c89a9defc1586d3  build/iso_root/boot/kernel.elf
    19e69d105af7bc95ffd07e9c2e00109797440c1ce92a82318c89a9defc1586d3  /tmp/iso_extracted_kernel.elf
    ```
-   This confirms that the pre-existing `build/zig-os.iso` booted by `./scripts/test-boot.sh` contains the exact same binary as `zig-out/bin/kernel.elf`. However, because `zig build` was not executed during this read-only audit, `./scripts/test-boot.sh` verifies **existing ISO boot success**, **not** a fresh compilation and QEMU boot of the current source tree.
+   While the `F-10A` implementation task (`9df21f8b`) manually ran `rm -rf build/ && ./scripts/build.sh iso` before invoking `./scripts/test-boot.sh`, the underlying scripts (`scripts/test-boot.sh`, `scripts/run.sh`, `scripts/debug.sh`, `tests/test_boot.py`) remain unmodified and still use an existing stale ISO if `build/zig-os.iso` is present on disk.
 3. **Optimization mode divergence:** `zig build test-boot` uses `standardOptimizeOption` (defaulting to `Debug`), whereas `./scripts/build.sh` hardcodes `-Doptimize=ReleaseSafe`.
 
 **Reproduction scenario:**  
@@ -1167,17 +1181,17 @@ The following claims from prior audit reports and earlier revisions were indepen
 
 ### P0 — Must Fix Before Further Kernel Development (2 Active Findings)
 
-**Included Active Findings:** `F-10`, `F-14`  
-*(Note: `F-01` was resolved and verified via Approach 1 in `build.zig`, confirmed with 0 prohibited instructions and clean QEMU boot).*
+**Included Active Findings:** `F-10` (`F-10B` pending; `F-10A` completed at `9df21f8`), `F-14`  
+*(Note: `F-01` was resolved and verified via Approach 1 in `build.zig` at `515aa91`; `F-10A` extracted the four pure math/layout modules `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig` at `9df21f8`).*
 
 - **Dependencies:** None (foundational testable kernel module architecture and build/test provenance).
 - **Required Implementation Tasks:**
-  1. **`F-10` (Testable Kernel Module Architecture):** Extract pure memory/paging/interrupt logic or add injectable backing interfaces so [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig) imports and tests production kernel code directly.
+  1. **`F-10` (`F-10B` — Stateful Kernel Core Testability):** Building on completed `F-10A`, refactor stateful PMM (`physical.zig`), VMM (`virtual.zig`), and Heap (`heap.zig`) cores with injectable/parameterized backing interfaces so [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig) directly compiles and tests production stateful allocator and paging algorithms on the host.
   2. **`F-14` (QEMU Test Provenance & Unconditional Rebuild):** Update [`scripts/test-boot.sh`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh), [`scripts/run.sh`](file:///home/leevawn/Projects/zig-os/scripts/run.sh), [`scripts/debug.sh`](file:///home/leevawn/Projects/zig-os/scripts/debug.sh), and [`tests/test_boot.py`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py) to unconditionally rebuild `kernel.elf` and `build/zig-os.iso`, unify optimization flags with `scripts/build.sh`, and print the SHA-256 of the tested `kernel.elf`.
 - **Required Regression Tests:**
-  - Verify `zig build test` imports production kernel modules and fails when a production module invariant is broken.
+  - Verify `zig build test` imports production kernel modules (`F-10A` completed for pure modules) and fails when a stateful PMM/VMM/Heap production invariant is broken (`F-10B` pending).
   - Verify `./scripts/test-boot.sh` rebuilds `build/zig-os.iso` on every invocation and logs the matching `kernel.elf` SHA-256 digest.
-- **Acceptance Criteria:** Verified current-source ISO provenance on every QEMU test run, and host unit tests bound to production kernel code.
+- **Acceptance Criteria:** Verified current-source ISO provenance on every QEMU test run, and host unit tests bound to both pure (`F-10A`) and stateful (`F-10B`) production kernel code.
 
 ---
 
