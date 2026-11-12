@@ -2,8 +2,8 @@
 
 > **Document Authority:** Principal Kernel Auditor & Documentation Architect (Gemini 4 Argon)  
 > **Original Audit Baseline:** `c10c05f1f37aacfda5046480a314f29d940b67ef` (`main`)  
-> **Current Implementation Snapshot:** `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`main`)  
-> **Audit Date:** 2026-11-11 (Updated: 2026-11-12)  
+> **Current Implementation Snapshot:** `771146810e41854f2b9e754f2a048f142ab633a8` (`main`)  
+> **Audit Date:** 2026-11-11 (Updated: 2026-11-13)  
 > **Scope:** Independent source, build-pipeline, and ELF binary verification for Phase 1 hardening.
 
 ---
@@ -19,6 +19,7 @@
 | **v1.3.1** | 2026-11-11 | Gemini 4 Argon | Refined `F-15`: (1) marked the initial `CR0.TS` register state at QEMU/Limine handoff as `UNVERIFIED` by direct GDB/runtime register capture (inferred only indirectly from absence of `#NM` during `./scripts/test-boot.sh`); (2) replaced the insufficient post-hoc `CR0` read check with a rigorous in-kernel QEMU regression test that deliberately sets `CR0.TS = 1` immediately before calling `cpu.enableSse()` with zero intervening FPU/SSE instructions and verifies both `CR0.TS` and `CR0.EM` are cleared afterward; and (3) distinguished host-testable pure `CR0` bit-mask logic from privileged Ring 0 runtime verification under QEMU. |
 | **v1.4** | 2026-11-12 | Gemini 3.8 Flash | Implemented and verified resolution for `F-01`: updated `build.zig` target configuration with `cpu_features_sub` (subtracting `.x87`, `.mmx`, `.sse`, `.sse2`, `.avx`, `.avx2`) and `cpu_features_add` (adding `.soft_float`); confirmed zero prohibited instructions in both `Debug` and `ReleaseSafe` kernel ELFs via `objdump -d`; verified clean QEMU boot and passing in-kernel self-tests on freshly built hybrid ISOs; marked `F-01` as `FIXED`. Reconciled all finding registers and priority distributions (`16 VERIFIED`, `1 LIKELY`, `1 FIXED`, `9 REJECTED`; `17` active findings; `P0`: `2`). |
 | **v1.5** | 2026-11-12 | Gemini 4 Argon | Updated register for implementation snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` pure-module extraction): (1) recorded current implementation snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` alongside historical original audit baseline `c10c05f1f37aacfda5046480a314f29d940b67ef`; (2) documented `F-10A` completion (`paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig` shared between production kernel modules and `tests/unit_test.zig`), explicitly distinguishing independently reviewed source structure from agent-reported build (`Debug`/`ReleaseSafe`), host unit test (`7/7` passing), and fresh ISO/QEMU boot evidence; (3) updated `F-10` evidence to replace the obsolete claim that `tests/unit_test.zig` duplicates all helpers with zero production imports, while keeping `F-10` `OPEN` / `VERIFIED` / `P0` because `F-10B` (stateful PMM, VMM, and Heap core testability) remains pending; and (4) preserved `F-14` as `OPEN` / `VERIFIED` / `P0` and retained all finding counts (`16 VERIFIED`, `1 LIKELY`, `1 FIXED`, `9 REJECTED`; `17` active findings; active `P0`: `F-10`, `F-14`). |
+| **v1.6** | 2026-11-13 | Gemini 4 Argon | Independently audited `F-14` implementation at commit `771146810e41854f2b9e754f2a048f142ab633a8` and updated register: (1) inspected `build.zig`, `scripts/build.sh`, `scripts/package-iso.sh`, `scripts/lib/common.sh`, `scripts/lib/provenance.sh`, `scripts/lib/qemu-runner.sh`, `scripts/test-boot.sh`, `scripts/run.sh`, `scripts/debug.sh`, and `tests/test_boot.py` against all nine `F-14` resolution criteria; (2) marked `F-14` as `FIXED` while preserving a strict boundary between independently reviewed source/artifact evidence and implementation-agent-reported build, QEMU smoke-test, and `E.1`–`E.7` regression outputs, and recorded a non-blocking implementation note that `mv -f` from `${TMPDIR:-/tmp}` (`tmpfs`) to `build/zig-os.iso` (`ext4`) performs a cross-filesystem copy-and-unlink when `TMPDIR` is unset; (3) corrected Section 1.1 branch wording (`main` first-parent ancestor on `origin/main` rather than `origin/dev baseline`); (4) retained `F-10` as `VERIFIED` / `OPEN` / `P0` (`F-10B` pending); and (5) reconciled all status (`15 VERIFIED`, `1 LIKELY`, `2 FIXED`, `9 REJECTED`; `16` active findings), severity (`5 HIGH`, `6 MEDIUM`, `3 LOW`, `2 INFORMATIONAL`), and priority (`P0: 1`, `P1: 10`, `P2: 2`, `P3: 3`) tables. |
 
 ---
 
@@ -26,27 +27,33 @@
 
 ### 1.1 Git Snapshot Identity
 
-| Attribute | Original Audit Baseline (`v1.0`–`v1.3.1`) | Current Implementation Snapshot (`v1.5`) | Match Status |
+| Attribute | Original Audit Baseline (`v1.0`–`v1.3.1`) | Current Implementation Snapshot (`v1.6`) | Match Status |
 |---|---|---|---|
 | **Repository** | `leevawn131/zig-os` | `leevawn131/zig-os` | **MATCH** |
-| **Branch** | `main` (`origin/dev` baseline) | `main` (`origin/main`) | **MATCH** |
-| **HEAD Commit SHA** | `c10c05f1f37aacfda5046480a314f29d940b67ef` | `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` | **EXACT MATCH** |
-| **Commit Subject** | `feat(kernel): implement Phase 1 core kernel infrastructure` | `refactor(mm,arch): extract pure math and layout modules for host unit tests (F-10A)` | **EXACT MATCH** |
-| **Commit Timestamp** | `2026-11-10T14:10:11+07:00` | `2026-11-12T20:25:24+07:00` | **EXACT MATCH** |
-| **Intervening Source Commits** | — | `515aa91becaf772f3f5b9243f92c1c0828f5d0bc` (`F-01` fix), `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` refactor) | **VERIFIED** |
+| **Branch** | `main` (`origin/main` first-parent ancestor; `origin/dev` ref also points to `c10c05f1`) | `main` (`origin/main`) | **MATCH** |
+| **HEAD Commit SHA** | `c10c05f1f37aacfda5046480a314f29d940b67ef` | `771146810e41854f2b9e754f2a048f142ab633a8` | **EXACT MATCH** |
+| **Commit Subject** | `feat(kernel): implement Phase 1 core kernel infrastructure` | `fix(build,scripts): enforce fresh builds, provenance checks, and ReleaseSafe default (F-14)` | **EXACT MATCH** |
+| **Commit Timestamp** | `2026-11-10T14:10:11+07:00` | `2026-11-13T00:56:01+07:00` | **EXACT MATCH** |
+| **Intervening Source Commits** | — | `515aa91becaf772f3f5b9243f92c1c0828f5d0bc` (`F-01` fix), `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` refactor), `771146810e41854f2b9e754f2a048f142ab633a8` (`F-14` fix) | **VERIFIED** |
 
 ### 1.2 Working Tree & Build Artifact Status (`git status --short`)
 
-At current snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`:
+At current snapshot `771146810e41854f2b9e754f2a048f142ab633a8`:
 ```text
  M zig.zip
 ?? docs/md.zip
 ?? graphify-out/
 ```
 
-- **Kernel, Linker, Build, and Test Source Integrity (`9df21f8`):** Zero tracked source files under [`kernel/`](file:///home/leevawn/Projects/zig-os/kernel), [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/`](file:///home/leevawn/Projects/zig-os/scripts), or [`tests/`](file:///home/leevawn/Projects/zig-os/tests) have uncommitted modifications. All tracked code and scripts match commit `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` byte-for-byte.
-- **Untouched Working-Tree Artifacts:** `zig.zip`, `docs/md.zip`, and `graphify-out/` remain untouched in the local workspace per governance safety rules.
-- **Agent-Reported Build Artifacts for `F-10A` (`9df21f8`):**
+- **Kernel, Linker, Build, and Test Source Integrity (`7711468`):** Zero tracked source files under [`kernel/`](file:///home/leevawn/Projects/zig-os/kernel), [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/`](file:///home/leevawn/Projects/zig-os/scripts), or [`tests/`](file:///home/leevawn/Projects/zig-os/tests) have uncommitted modifications. All tracked code and scripts match commit `771146810e41854f2b9e754f2a048f142ab633a8` byte-for-byte.
+- **Untouched Working-Tree Artifacts:** `zig.zip`, `docs/md.zip`, and `graphify-out/` remain untouched in the local workspace per governance safety rules (causing `git status --porcelain` in `scripts/lib/common.sh` to report `tree=dirty` during local builds).
+- **On-Disk Build Artifacts at `7711468` (Independently Inspected via `sha256sum`; `ReleaseSafe` Default Build):**
+  ```text
+  7b1ac542917334d3b222100f80f86bcab164134d51243340ef15db49d8d3b861  zig-out/bin/kernel.elf
+  7b1ac542917334d3b222100f80f86bcab164134d51243340ef15db49d8d3b861  build/iso_root/boot/kernel.elf
+  c819a34806abfc810a0e4faec179eeb8e9da3732639e210828d0e8fbce44ace4  build/zig-os.iso
+  ```
+- **Agent-Reported Build Artifacts for `F-10A` (`9df21f8`, `Debug` Kernel ELF):**
   ```text
   0704203edb046d847ad73bb8df3b5ef7d13118ee40a3204d1f6d96e33d47e964  zig-out/bin/kernel.elf
   0335e152875e8cdc4b75cd33ea937cdbc1c9e639495dce8b55cb5a0b67d6e78b  build/zig-os.iso
@@ -68,10 +75,10 @@ Every claim in this register is classified strictly by the verification method a
 
 | Verification Tier | Executed / Provenance | Command / Method | Empirical Result & Provenance |
 |---|---|---|---|
-| **Static Source Inspection (`c10c05f` & `9df21f8`)** | **YES (Independently Audited)** | Direct line-by-line review of all files in `kernel/`, `build.zig`, `scripts/`, `tests/`, `docs/`, and `/opt/zig/current/lib/std/Target/x86.zig` | Completed across 100% of kernel and build sources at baseline `c10c05f1f37aacfda5046480a314f29d940b67ef` and re-verified at `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` shared modules `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig`). |
-| **ELF & ISO Binary Inspection (`c10c05f` & `515aa91`)** | **YES (Baseline Audited / `F-01` Agent-Reported)** | `sha256sum`, `xorriso -extract`, `readelf -h -l -S -d`, `nm -n`, `objdump -d -M intel` | At `c10c05f`, confirmed `/boot/kernel.elf` inside `build/zig-os.iso` matched `zig-out/bin/kernel.elf` (`19e69d10...`), 3 `PT_LOAD` segments (`R E`, `R`, `RW`), orphan `.got` section, Limine request ordering, and 6,904 `xmm` / 2,274 `movaps` instructions. At `515aa91` (`F-01`), implementation agent reported `0` prohibited SIMD/x87 instructions in `Debug` and `ReleaseSafe` ELFs. |
-| **Host Unit Tests (`c10c05f` vs. `9df21f8`)** | **Baseline Audited / `9df21f8` Source Reviewed & Agent-Reported** | `zig build test --summary all` and direct `zig test` with `--dep` module flags | At `c10c05f`, `5/5` tests passed against local duplicate functions in `tests/unit_test.zig`. At `9df21f8` (`F-10A`), static review confirms `tests/unit_test.zig` imports the 4 shared production modules (`paging_math`, `physical_math`, `page_fault`, `heap_layout`) with zero local duplicates; implementation agent reported `All 7 tests passed` (`7/7`). Stateful PMM/VMM/Heap logic remains untested on host (`F-10B`). |
-| **Build & QEMU Boot Verification (`c10c05f` vs. `9df21f8`)** | **Baseline Pre-Built ISO Audited / `9df21f8` Agent-Reported** | `zig build -Doptimize=Debug`, `zig build -Doptimize=ReleaseSafe`, `rm -rf build/ && ./scripts/build.sh iso`, `./scripts/test-boot.sh` | At `c10c05f`, `./scripts/test-boot.sh` booted pre-existing `build/zig-os.iso` (`19e69d10...`). At `9df21f8` (`F-10A`), implementation agent reported passing `Debug` and `ReleaseSafe` builds, fresh ISO generation (`0335e152...`, `kernel.elf` `0704203e...`), and `12/12` passing checks in `./scripts/test-boot.sh`. Direct script invocation without removing `build/zig-os.iso` still skips rebuilding (`F-14`). |
+| **Static Source Inspection (`c10c05f`, `9df21f8`, & `7711468`)** | **YES (Independently Audited)** | Direct line-by-line review of all files in `kernel/`, `build.zig`, `scripts/`, `tests/`, `docs/`, and `/opt/zig/current/lib/std/Target/x86.zig` | Completed across 100% of kernel and build sources at baseline `c10c05f1f37aacfda5046480a314f29d940b67ef`, re-verified at `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` shared modules `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, `heap_layout.zig`), and independently audited at `771146810e41854f2b9e754f2a048f142ab633a8` across all 10 `F-14` build/script/test files (`build.zig`, `scripts/build.sh`, `scripts/package-iso.sh`, `scripts/lib/common.sh`, `scripts/lib/provenance.sh`, `scripts/lib/qemu-runner.sh`, `scripts/test-boot.sh`, `scripts/run.sh`, `scripts/debug.sh`, `tests/test_boot.py`). |
+| **ELF & ISO Binary Inspection (`c10c05f`, `515aa91`, & `7711468`)** | **YES (Baseline & On-Disk Hashes Audited / `F-01` Disassembly Agent-Reported)** | `sha256sum`, `xorriso -extract`, `readelf -h -l -S -d`, `nm -n`, `objdump -d -M intel`, `df -T` | At `c10c05f`, confirmed `/boot/kernel.elf` inside `build/zig-os.iso` matched `zig-out/bin/kernel.elf` (`19e69d10...`), 3 `PT_LOAD` segments (`R E`, `R`, `RW`), orphan `.got` section, Limine request ordering, and 6,904 `xmm` / 2,274 `movaps` instructions. At `515aa91` (`F-01`), implementation agent reported `0` prohibited SIMD/x87 instructions in `Debug` and `ReleaseSafe` ELFs. At `7711468` (`F-14`), auditor verified on-disk `zig-out/bin/kernel.elf` and `build/iso_root/boot/kernel.elf` SHA-256 (`7b1ac542...`) and filesystem mount topology (`/tmp` on `tmpfs` vs. `build/` on `ext4`). |
+| **Host Unit Tests (`c10c05f` vs. `9df21f8` & `7711468`)** | **Baseline Audited / `9df21f8` & `7711468` Source Reviewed & Agent-Reported** | `zig build test --summary all` and direct `zig test` with `--dep` module flags | At `c10c05f`, `5/5` tests passed against local duplicate functions in `tests/unit_test.zig`. At `9df21f8` (`F-10A`) and `7711468` (`F-14`), static review confirms `tests/unit_test.zig` imports the 4 shared production modules (`paging_math`, `physical_math`, `page_fault`, `heap_layout`) with zero local duplicates; implementation agent reported `7/7` tests passing (`3/3 steps succeeded`). Stateful PMM/VMM/Heap logic remains untested on host (`F-10B`). |
+| **Build, Provenance, & QEMU Boot Verification (`c10c05f` vs. `9df21f8` & `7711468`)** | **Baseline Audited / `9df21f8` & `7711468` Source Audited & Execution Agent-Reported** | `zig build -Doptimize=Debug iso`, `zig build -Doptimize=ReleaseSafe iso`, `zig build test-boot`, `./scripts/test-boot.sh`, `python3 tests/test_boot.py`, `verify_f14_regressions.sh` (`E.1`–`E.7`) | At `7711468` (`F-14`), independent source review confirms every public entrypoint builds fresh artifacts, defaults to `ReleaseSafe`, uses a non-recursive Zig build graph, and enforces 3-way kernel ELF SHA-256 provenance before QEMU launch. Implementation agent reported passing `Debug` (`0704203e...`) and `ReleaseSafe` (`7b1ac542...`) ISO builds, passing headless QEMU smoke tests across `zig build test-boot`, `./scripts/test-boot.sh`, and `python3 tests/test_boot.py`, and passing regression checks `E.1`–`E.7` (with `E.2a`–`E.2c` and `E.7a`–`E.7d` using a `PATH`-stubbed `qemu-system-x86_64`). No build or QEMU run was re-executed by the auditor during the `v1.6` documentation review. |
 
 ---
 
@@ -81,27 +88,27 @@ Every claim in this register is classified strictly by the verification method a
 
 | Status Category | Count | Finding IDs |
 |---|---:|---|
-| **VERIFIED** | **16** | `F-03`, `F-04`, `F-06`, `F-07`, `F-08`, `F-09`, `F-10`, `F-11`, `F-12`, `F-13`, `F-14`, `F-15`, `F-16`, `F-17`, `F-18`, `F-20` |
+| **VERIFIED** | **15** | `F-03`, `F-04`, `F-06`, `F-07`, `F-08`, `F-09`, `F-10`, `F-11`, `F-12`, `F-13`, `F-15`, `F-16`, `F-17`, `F-18`, `F-20` |
 | **LIKELY** | **1** | `F-19` |
 | **NEEDS_RUNTIME_VERIFICATION** | **0** | None |
 | **REJECTED** | **9** | `R-01`, `R-02`, `R-03`, `R-04`, `R-05`, `R-06`, `R-07`, `R-08` (formerly `F-05`), `R-09` (formerly `F-02`) |
-| **FIXED** | **1** | `F-01` (Approach 1: `cpu_features_sub`/`cpu_features_add` in `build.zig`) |
+| **FIXED** | **2** | `F-01` (at `515aa91`: `cpu_features_sub`/`cpu_features_add` in `build.zig`), `F-14` (at `7711468`: unconditional fresh build, non-recursive graph, `ReleaseSafe` default, and 3-way ELF SHA-256 provenance verification) |
 
-### 3.2 Severity Distribution (Active Findings: 17 Total)
+### 3.2 Severity Distribution (Active Findings: 16 Total)
 
 | Severity | Count | Finding IDs |
 |---|---:|---|
 | **CRITICAL** | **0** | None |
 | **HIGH** | **5** | `F-06`, `F-07`, `F-08`, `F-09`, `F-10` |
-| **MEDIUM** | **7** | `F-03`, `F-04`, `F-11`, `F-12`, `F-13`, `F-14`, `F-15` |
+| **MEDIUM** | **6** | `F-03`, `F-04`, `F-11`, `F-12`, `F-13`, `F-15` |
 | **LOW** | **3** | `F-16`, `F-18`, `F-19` |
 | **INFORMATIONAL** | **2** | `F-17`, `F-20` |
 
-### 3.3 Priority Distribution (`P0`–`P3`: 17 Active Findings)
+### 3.3 Priority Distribution (`P0`–`P3`: 16 Active Findings)
 
 | Priority | Count | Finding IDs |
 |---|---:|---|
-| **P0 — Must fix before further kernel development** | **2** | `F-10`, `F-14` (`F-01` is FIXED) |
+| **P0 — Must fix before further kernel development** | **1** | `F-10` (`F-10B` pending; `F-01` and `F-14` are `FIXED`) |
 | **P1 — Must fix before Phase 2 authorization** | **10** | `F-03`, `F-04`, `F-06`, `F-07`, `F-08`, `F-09`, `F-11`, `F-12`, `F-13`, `F-15` |
 | **P2 — Important hardening that can follow** | **2** | `F-16`, `F-19` |
 | **P3 — Future improvements** | **3** | `F-17`, `F-18`, `F-20` |
@@ -110,7 +117,7 @@ Every claim in this register is classified strictly by the verification method a
 
 ## 4. Finding Register (`F-01`–`F-20`)
 
-> **Source Version Note:** Findings were originally audited at baseline commit `c10c05f1f37aacfda5046480a314f29d940b67ef` (`2026-11-10`) and updated through current implementation snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`2026-11-12`, incorporating `515aa91` for `F-01` and `9df21f8` for `F-10A`). Historical IDs `F-02` and `F-05` are retained in place with `Status: REJECTED` and cross-referenced to `R-09` and `R-08` in Section 5 to preserve full audit traceability.
+> **Source Version Note:** Findings were originally audited at baseline commit `c10c05f1f37aacfda5046480a314f29d940b67ef` (`2026-11-10`) and updated through current implementation snapshot `771146810e41854f2b9e754f2a048f142ab633a8` (`2026-11-13`, incorporating `515aa91` for `F-01`, `9df21f8` for `F-10A`, and `7711468` for `F-14`). Historical IDs `F-02` and `F-05` are retained in place with `Status: REJECTED` and cross-referenced to `R-09` and `R-08` in Section 5 to preserve full audit traceability.
 
 ---
 
@@ -577,7 +584,7 @@ Host unit test suite ([`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-
 
 **Source location:**  
 - [`tests/unit_test.zig:1-222`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig#L1-L222)
-- [`build.zig:68-100`](file:///home/leevawn/Projects/zig-os/build.zig#L68-L100)
+- [`build.zig:123-155`](file:///home/leevawn/Projects/zig-os/build.zig#L123-L155)
 - [`kernel/src/mm/paging_math.zig:1-30`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/paging_math.zig#L1-L30) and [`kernel/src/mm/virtual.zig:6-14, 38-155`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/virtual.zig#L6-L14)
 - [`kernel/src/mm/physical_math.zig:1-29`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_math.zig#L1-L29) and [`kernel/src/mm/physical.zig:6-119, 131-243`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L6-L119)
 - [`kernel/src/arch/x86_64/interrupts/page_fault.zig:1-20`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/interrupts/page_fault.zig#L1-L20) and [`kernel/src/arch/x86_64/idt/handlers.zig:5-7, 127-133`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/idt/handlers.zig#L5-L7)
@@ -585,12 +592,12 @@ Host unit test suite ([`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-
 
 **Evidence:**  
 1. **Completed `F-10A` Pure-Module Extraction (Snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`):**
-   - **Independently Reviewed Source Structure:** Direct source inspection of commit `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` confirms that all previously duplicated pure functions and layout structures were extracted into four hardware-independent production modules under `kernel/src/` and wired into both the freestanding kernel and [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig):
+   - **Independently Reviewed Source Structure:** Direct source inspection of commit `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (and current snapshot `771146810e41854f2b9e754f2a048f142ab633a8`) confirms that all previously duplicated pure functions and layout structures were extracted into four hardware-independent production modules under `kernel/src/` and wired into both the freestanding kernel and [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig):
      - [`kernel/src/mm/paging_math.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/paging_math.zig): Defines `PAGE_SIZE`, `pml4Index`, `pdptIndex`, `pdIndex`, `ptIndex`, and `pageOffset`, imported and re-exported by [`kernel/src/mm/virtual.zig:6-14`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/virtual.zig#L6-L14).
      - [`kernel/src/mm/physical_math.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_math.zig): Defines `PAGE_SIZE`, `totalPagesFromBytes`, `bitmapSizeBytes`, `physToFrame`, `frameToByteIndex`, and `frameToBitIndex`, imported and used across [`kernel/src/mm/physical.zig:6-119, 208-240`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L6-L119).
      - [`kernel/src/arch/x86_64/interrupts/page_fault.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/interrupts/page_fault.zig): Defines `PageFaultCause` and `PageFaultCause.decode()`, imported and used by [`kernel/src/arch/x86_64/idt/handlers.zig:5-7, 127-133`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/idt/handlers.zig#L5-L7).
      - [`kernel/src/mm/heap_layout.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig): Defines `BlockHeader` (`extern struct`, `@sizeOf(BlockHeader) == 40`, `@alignOf(BlockHeader) == 8`) and `HEADER_SIZE`, imported and re-exported by [`kernel/src/mm/heap.zig:15-18`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L15-L18).
-     - [`build.zig:68-100`](file:///home/leevawn/Projects/zig-os/build.zig#L68-L100) and [`tests/unit_test.zig:5-222`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig#L5-L222): `build.zig` exposes `paging_math`, `physical_math`, `page_fault`, and `heap_layout` via `test_mod.addAnonymousImport(...)`, and `tests/unit_test.zig` imports those four production modules directly with all local duplicate helper and struct definitions removed.
+     - [`build.zig:123-155`](file:///home/leevawn/Projects/zig-os/build.zig#L123-L155) and [`tests/unit_test.zig:5-222`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig#L5-L222): `build.zig` exposes `paging_math`, `physical_math`, `page_fault`, and `heap_layout` via `test_mod.addAnonymousImport(...)`, and `tests/unit_test.zig` imports those four production modules directly with all local duplicate helper and struct definitions removed.
    - **Agent-Reported Build & Runtime Evidence (`F-10A` at `9df21f8`):** The implementation agent reported:
      - `7/7` host unit tests passing (`zig build test --summary all` and direct `zig test` execution).
      - `Debug` (`zig build -Doptimize=Debug --summary all`) and `ReleaseSafe` (`zig build -Doptimize=ReleaseSafe --summary all`) freestanding kernel builds succeeding with zero warnings or errors.
@@ -782,62 +789,50 @@ Related to `F-09`.
 
 ### [F-14] Direct execution of `scripts/test-boot.sh` and `tests/test_boot.py` skips rebuilding when `build/zig-os.iso` exists, obscuring QEMU test provenance
 
-**Status:** VERIFIED
+**Status:** FIXED (Independently Source-Audited at `771146810e41854f2b9e754f2a048f142ab633a8`; Build, QEMU Smoke-Test, & Regression Suite `E.1`–`E.7` Agent-Reported)
 
-**Severity:** MEDIUM
+**Severity:** MEDIUM (Resolved)
 
 **Confidence:** HIGH
 
 **Affected component:**  
-Build and smoke-test scripts ([`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/build.sh`](file:///home/leevawn/Projects/zig-os/scripts/build.sh), [`scripts/test-boot.sh`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh), [`scripts/run.sh`](file:///home/leevawn/Projects/zig-os/scripts/run.sh), [`scripts/debug.sh`](file:///home/leevawn/Projects/zig-os/scripts/debug.sh), [`tests/test_boot.py`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py)).
+Build graph, ISO packager, provenance verifier, and public run/debug/test entrypoints ([`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/build.sh`](file:///home/leevawn/Projects/zig-os/scripts/build.sh), [`scripts/package-iso.sh`](file:///home/leevawn/Projects/zig-os/scripts/package-iso.sh), [`scripts/lib/common.sh`](file:///home/leevawn/Projects/zig-os/scripts/lib/common.sh), [`scripts/lib/provenance.sh`](file:///home/leevawn/Projects/zig-os/scripts/lib/provenance.sh), [`scripts/lib/qemu-runner.sh`](file:///home/leevawn/Projects/zig-os/scripts/lib/qemu-runner.sh), [`scripts/test-boot.sh`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh), [`scripts/run.sh`](file:///home/leevawn/Projects/zig-os/scripts/run.sh), [`scripts/debug.sh`](file:///home/leevawn/Projects/zig-os/scripts/debug.sh), [`tests/test_boot.py`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py)).
 
 **Source location:**  
-- [`build.zig:22, 44-67`](file:///home/leevawn/Projects/zig-os/build.zig#L44-L67)
-- [`scripts/build.sh:25-28`](file:///home/leevawn/Projects/zig-os/scripts/build.sh#L25-L28)
-- [`scripts/test-boot.sh:22-25`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh#L22-L25)
-- [`tests/test_boot.py:32-37`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py#L32-L37)
+- [`build.zig:22-121`](file:///home/leevawn/Projects/zig-os/build.zig#L22-L121)
+- [`scripts/build.sh:1-20`](file:///home/leevawn/Projects/zig-os/scripts/build.sh#L1-L20)
+- [`scripts/package-iso.sh:1-82`](file:///home/leevawn/Projects/zig-os/scripts/package-iso.sh#L1-L82)
+- [`scripts/lib/common.sh:1-90`](file:///home/leevawn/Projects/zig-os/scripts/lib/common.sh#L1-L90)
+- [`scripts/lib/provenance.sh:1-92`](file:///home/leevawn/Projects/zig-os/scripts/lib/provenance.sh#L1-L92)
+- [`scripts/lib/qemu-runner.sh:1-175`](file:///home/leevawn/Projects/zig-os/scripts/lib/qemu-runner.sh#L1-L175)
+- [`scripts/test-boot.sh:1-22`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh#L1-L22)
+- [`scripts/run.sh:1-22`](file:///home/leevawn/Projects/zig-os/scripts/run.sh#L1-L22)
+- [`scripts/debug.sh:1-22`](file:///home/leevawn/Projects/zig-os/scripts/debug.sh#L1-L22)
+- [`tests/test_boot.py:1-80`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py#L1-L80)
 
-**Evidence:**  
-In [`scripts/test-boot.sh:22-25`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh#L22-L25) (and identically in `scripts/run.sh`, `scripts/debug.sh`, and `tests/test_boot.py`):
-```bash
-if [[ ! -f "${ISO}" ]]; then
-    echo "[TEST] Building bootable ISO..."
-    "${PROJECT_ROOT}/scripts/build.sh"
-fi
-```
-And in [`scripts/build.sh:25-28`](file:///home/leevawn/Projects/zig-os/scripts/build.sh#L25-L28):
-```bash
-if [[ ! -f "${KERNEL_BIN}" || "${1:-}" != "iso" ]]; then
-    echo "[BUILD] Compiling ZIG-OS kernel via Zig build system..."
-    zig build -Doptimize=ReleaseSafe
-fi
-```
+**Resolution & Independent Audit Evaluation (v1.6, Commit `771146810e41854f2b9e754f2a048f142ab633a8`):**  
+1. **Independently Reviewed Source Evidence against All Nine Resolution Criteria:**
+   - **Criterion 1 (Direct `scripts/test-boot.sh` always builds before QEMU):** [`scripts/test-boot.sh:11-22`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh#L11-L22) removes all `if [[ ! -f "${ISO}" ]]` skip checks, parses `--optimize` / `-Doptimize` via `resolve_optimize_from_args 0 "$@"` (rejecting any unrecognized or bypass flags), unconditionally executes `zig build -Doptimize="${ZIG_OS_SELECTED_OPTIMIZE}" iso`, and then `exec`s [`scripts/lib/qemu-runner.sh`](file:///home/leevawn/Projects/zig-os/scripts/lib/qemu-runner.sh) in `test-boot` mode.
+   - **Criterion 2 (Direct `scripts/run.sh` and `scripts/debug.sh` always build before QEMU):** [`scripts/run.sh:11-22`](file:///home/leevawn/Projects/zig-os/scripts/run.sh#L11-L22) and [`scripts/debug.sh:11-22`](file:///home/leevawn/Projects/zig-os/scripts/debug.sh#L11-L22) identically remove all `if [[ ! -f "${ISO}" ]]` skip checks, resolve optimization flags via `resolve_optimize_from_args 0 "$@"`, unconditionally run `zig build -Doptimize="${ZIG_OS_SELECTED_OPTIMIZE}" iso`, and `exec` [`scripts/lib/qemu-runner.sh`](file:///home/leevawn/Projects/zig-os/scripts/lib/qemu-runner.sh) (`run` / `debug`). Likewise, [`scripts/build.sh:11-20`](file:///home/leevawn/Projects/zig-os/scripts/build.sh#L11-L20) removes `if [[ ! -f "${KERNEL_BIN}" || "${1:-}" != "iso" ]]` and unconditionally runs `exec zig build -Doptimize="${ZIG_OS_SELECTED_OPTIMIZE}" iso`.
+   - **Criterion 3 (Python test delegates to the canonical path):** [`tests/test_boot.py:26-76`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py#L26-L76) defines an `argparse.ArgumentParser` accepting only `--optimize` / `-Doptimize` (no `--skip-build` or bypass flags exist), normalizes the mode via `OPTIMIZE_ALIASES` (defaulting to `ReleaseSafe`), and delegates via `subprocess.run(["bash", test_script, "--optimize", optimize], cwd=repo_root)` to `scripts/test-boot.sh`, returning `res.returncode`.
+   - **Criterion 4 (Zig build targets use a non-recursive build graph):** [`build.zig:60-121`](file:///home/leevawn/Projects/zig-os/build.zig#L60-L121) separates the pipeline into three non-recursive stages:
+     - `install` depends on `install_kernel` (`b.addInstallArtifact(kernel, .{})`) and `log_optimize` (`printf "[BUILD] Optimization mode: %s\n"`).
+     - `iso` (`iso_step`) runs `bash scripts/package-iso.sh --optimize <optimize_name>` (`iso_cmd.step.dependOn(b.getInstallStep())`). [`scripts/package-iso.sh:1-82`](file:///home/leevawn/Projects/zig-os/scripts/package-iso.sh#L1-L82) packages `zig-out/bin/kernel.elf` into `build/zig-os.iso` without invoking `zig`.
+     - `run`, `debug`, and `test-boot` run `bash scripts/lib/qemu-runner.sh <mode> --optimize <optimize_name>` and depend on `iso_step`. [`scripts/lib/qemu-runner.sh:1-175`](file:///home/leevawn/Projects/zig-os/scripts/lib/qemu-runner.sh#L1-L175) verifies provenance and launches QEMU without invoking `zig` or `scripts/build.sh`.
+   - **Criterion 5 (Default optimization is `ReleaseSafe`):** [`build.zig:25-34`](file:///home/leevawn/Projects/zig-os/build.zig#L25-L34) computes `default_optimize` from `b.graph.release_mode` (mapping `.off, .any, .safe => .safe`) as the fallback for `b.option(std.builtin.Optimize, "optimize", ...)`; [`scripts/lib/common.sh:67-71`](file:///home/leevawn/Projects/zig-os/scripts/lib/common.sh#L67-L71) defaults `raw_opt` to `ReleaseSafe`; and [`tests/test_boot.py:52`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py#L52) defaults `raw_optimize` to `"ReleaseSafe"`.
+   - **Criterion 6 (Explicit `Debug`, `ReleaseFast`, and `ReleaseSmall` are supported):** [`build.zig:25-40`](file:///home/leevawn/Projects/zig-os/build.zig#L25-L40) accepts all four `std.builtin.Optimize` enum values (`debug`, `safe`, `fast`, `small`) and maps them to `"Debug"`, `"ReleaseSafe"`, `"ReleaseFast"`, and `"ReleaseSmall"`; [`scripts/lib/common.sh:4-24`](file:///home/leevawn/Projects/zig-os/scripts/lib/common.sh#L4-L24) and [`tests/test_boot.py:14-23`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py#L14-L23) normalize both canonical names (`Debug`, `ReleaseSafe`, `ReleaseFast`, `ReleaseSmall`) and Zig CLI enum aliases (`debug`, `safe`, `fast`, `small`).
+   - **Criterion 7 (Kernel ELF in the ISO matches `zig-out/bin/kernel.elf`):** [`scripts/package-iso.sh:45-82`](file:///home/leevawn/Projects/zig-os/scripts/package-iso.sh#L45-L82) refreshes `build/iso_root`, copies `zig-out/bin/kernel.elf` to `build/iso_root/boot/kernel.elf`, builds the ISO, and calls `verify_and_log_provenance` ([`scripts/lib/provenance.sh:8-92`](file:///home/leevawn/Projects/zig-os/scripts/lib/provenance.sh#L8-L92)), which extracts `/boot/kernel.elf` from `build/zig-os.iso` via `xorriso -osirrox on -indev "${iso_file}" -extract /boot/kernel.elf "${extracted_kernel}"`, logs SHA-256 digests of `zig-out/bin/kernel.elf`, `build/iso_root/boot/kernel.elf`, `ISO:/boot/kernel.elf`, and `build/zig-os.iso` (plus optimization mode, Git commit, and working-tree status), and asserts `hash_zig_out == hash_iso_root` and `hash_zig_out == hash_extracted`.
+   - **Criterion 8 (Missing artifacts, extraction errors, and hash mismatches prevent QEMU execution):** [`scripts/lib/qemu-runner.sh:2,29`](file:///home/leevawn/Projects/zig-os/scripts/lib/qemu-runner.sh#L2) runs under `set -euo pipefail` and calls `verify_and_log_provenance` at line 29 before reaching the `case "${MODE}"` QEMU invocation block (lines 31–170). In [`scripts/lib/provenance.sh:25-88`](file:///home/leevawn/Projects/zig-os/scripts/lib/provenance.sh#L25-L88), missing or empty files (`! -f` or `! -s`), `xorriso` extraction failures, empty extracted ELFs, or any mismatch among `hash_zig_out`, `hash_iso_root`, and `hash_extracted` immediately return/exit `1`, aborting before `qemu-system-x86_64` is executed.
+   - **Criterion 9 (Regression suite `E.1`–`E.7` coverage):** The implementation agent reported passing execution of `verify_f14_regressions.sh` (`E.1`–`E.7`), covering stale artifact replacement on direct `scripts/test-boot.sh` (`E.1`), fresh build enforcement on `scripts/run.sh`, `scripts/debug.sh`, `zig build run`, and `zig build debug` (`E.2a`–`E.2c`), `python3 tests/test_boot.py` fresh rebuild and `--skip-build` rejection (`E.3`), `ReleaseSafe` default and single (`1`) `zig` invocation during `zig build test-boot` (`E.4`), `scripts/build.sh iso -Doptimize=Debug` fresh compilation when `kernel.elf` already exists (`E.5`), independent `xorriso` extraction hash verification (`E.6`), and non-zero abort prior to QEMU launch on build failure, missing artifact, extraction failure, and SHA-256 mismatch (`E.7a`–`E.7d`).
+2. **Non-Blocking Implementation Note (Cross-Filesystem Temporary ISO Move in `scripts/package-iso.sh`):**
+   - In [`scripts/package-iso.sh:57,63,77`](file:///home/leevawn/Projects/zig-os/scripts/package-iso.sh#L57), the temporary staging directory is created via `PKG_TMP="$(mktemp -d "${TMPDIR:-/tmp}/zig-os-pkg-XXXXXX")"` and the completed image is moved to `OUTPUT_ISO` (`build/zig-os.iso`) via `mv -f "${TMP_ISO}" "${OUTPUT_ISO}"`.
+   - Auditor inspection via `df -T /tmp /home/leevawn/Projects/zig-os/build` confirms `/tmp` is mounted on `tmpfs` while `/home/leevawn/Projects/zig-os/build` resides on `/dev/nvme0n1p2` (`ext4`). When `TMPDIR` is unset, `mv` from `/tmp` (`tmpfs`) to `build/` (`ext4`) crosses filesystem boundaries and therefore performs a copy-and-unlink rather than an atomic single-syscall POSIX `rename(2)`. While generating the ISO in `PKG_TMP` still prevents failed `xorriso` or `limine bios-install` commands from writing a partial file to `build/zig-os.iso`, true same-filesystem `rename(2)` atomicity would require creating the temporary file inside `${BUILD_DIR}`.
+3. **Provenance Boundary (Auditor-Reviewed vs. Implementation-Agent-Reported Evidence):**
+   - **Independently Audited by Argon (`v1.6`):** Full source inspection of all 10 `F-14` files at commit `771146810e41854f2b9e754f2a048f142ab633a8`, verification of Git history (`7711468` atop `9ab3f1e`), on-disk `sha256sum` check (`zig-out/bin/kernel.elf` and `build/iso_root/boot/kernel.elf` = `7b1ac542917334d3b222100f80f86bcab164134d51243340ef15db49d8d3b861`; `build/zig-os.iso` = `c819a34806abfc810a0e4faec179eeb8e9da3732639e210828d0e8fbce44ace4`), and filesystem mount inspection (`df -T`). The auditor did not re-execute `zig build` or QEMU during the `v1.6` documentation pass.
+   - **Implementation-Agent-Reported (`7711468`):** Passing `zig build --summary all`, `zig build test --summary all`, `zig build -Doptimize=Debug iso --summary all` (`Debug` ELF `0704203edb046d847ad73bb8df3b5ef7d13118ee40a3204d1f6d96e33d47e964`), `zig build -Doptimize=Debug test-boot --summary all`, `zig build -Doptimize=ReleaseSafe iso --summary all` (`ReleaseSafe` ELF `7b1ac542917334d3b222100f80f86bcab164134d51243340ef15db49d8d3b861`), `./scripts/test-boot.sh`, `python3 tests/test_boot.py`, `zig build test-boot --summary all`, and regression suite `E.1`–`E.7` (with `E.2a`–`E.2c` and `E.7a`–`E.7d` using a `PATH`-stubbed `qemu-system-x86_64`).
 
-**Technical explanation:**  
-1. **Stale ISO execution on direct script invocation:** While `zig build test-boot` (`build.zig:62-66`) depends on `iso_step` $\to$ `b.getInstallStep()` and always rebuilds `kernel.elf` and `build/zig-os.iso`, invoking `./scripts/test-boot.sh` or `python3 tests/test_boot.py` directly (as instructed in [`docs/TESTING_POLICY.md:61,85`](file:///home/leevawn/Projects/zig-os/docs/TESTING_POLICY.md#L61)) checks `if [[ ! -f "${ISO}" ]]` and boots the pre-existing `build/zig-os.iso` without recompiling `kernel/src/`.
-2. **Audit provenance distinction:** During the initial baseline audit (`c10c05f1`), `/boot/kernel.elf` was extracted from `build/zig-os.iso` via `xorriso` and compared against the workspace build artifacts:
-   ```text
-   $ xorriso -osirrox on -indev build/zig-os.iso -extract /boot/kernel.elf /tmp/iso_extracted_kernel.elf
-   $ sha256sum zig-out/bin/kernel.elf build/iso_root/boot/kernel.elf /tmp/iso_extracted_kernel.elf
-   19e69d105af7bc95ffd07e9c2e00109797440c1ce92a82318c89a9defc1586d3  zig-out/bin/kernel.elf
-   19e69d105af7bc95ffd07e9c2e00109797440c1ce92a82318c89a9defc1586d3  build/iso_root/boot/kernel.elf
-   19e69d105af7bc95ffd07e9c2e00109797440c1ce92a82318c89a9defc1586d3  /tmp/iso_extracted_kernel.elf
-   ```
-   While the `F-10A` implementation task (`9df21f8b`) manually ran `rm -rf build/ && ./scripts/build.sh iso` before invoking `./scripts/test-boot.sh`, the underlying scripts (`scripts/test-boot.sh`, `scripts/run.sh`, `scripts/debug.sh`, `tests/test_boot.py`) remain unmodified and still use an existing stale ISO if `build/zig-os.iso` is present on disk.
-3. **Optimization mode divergence:** `zig build test-boot` uses `standardOptimizeOption` (defaulting to `Debug`), whereas `./scripts/build.sh` hardcodes `-Doptimize=ReleaseSafe`.
-
-**Reproduction scenario:**  
-When `build/zig-os.iso` already exists on disk, running `./scripts/test-boot.sh` skips `scripts/build.sh` completely and boots the existing ISO image.
-
-**Impact:**  
-Executing `./scripts/test-boot.sh` after editing `kernel/src/` tests the old ISO image and can produce false `QEMU VERIFIED` claims.
-
-**Recommended correction:**  
-1. Update `scripts/test-boot.sh`, `scripts/run.sh`, `scripts/debug.sh`, and `tests/test_boot.py` to unconditionally rebuild `kernel.elf` and `build/zig-os.iso` (or invoke `zig build iso`) before launching QEMU, and log the SHA-256 of `zig-out/bin/kernel.elf` and `build/zig-os.iso` in test output.
-2. Unify optimization mode handling between `build.zig` and `scripts/build.sh`.
-
-**Regression tests:**  
-1. Verify that running `./scripts/test-boot.sh` always invokes the build step and updates the timestamp/digest of `build/zig-os.iso`.
+**Historical Evidence (Baseline `c10c05f1` through `9df21f8b`):**  
+Prior to `77114681`, `scripts/test-boot.sh`, `scripts/run.sh`, `scripts/debug.sh`, and `tests/test_boot.py` guarded ISO generation behind `if [[ ! -f "${ISO}" ]]` (or `if not os.path.exists(iso_path):`), `scripts/build.sh` guarded kernel compilation behind `if [[ ! -f "${KERNEL_BIN}" || "${1:-}" != "iso" ]]` while invoking `zig build -Doptimize=ReleaseSafe` recursively when called from `build.zig`, and `build.zig` used `b.standardOptimizeOption(.{})` (defaulting to `Debug`) while `scripts/build.sh` hardcoded `ReleaseSafe`.
 
 **Dependencies:**  
 None.
@@ -1179,19 +1174,17 @@ The following claims from prior audit reports and earlier revisions were indepen
 
 > **Governance Gate Notice:** This section defines the proposed engineering sequence for **Phase 1 Hardening**. It does **not** authorize Phase 2 and does **not** mark Phase 1 as Human Approved. Only the Project Owner may approve milestone gates.
 
-### P0 — Must Fix Before Further Kernel Development (2 Active Findings)
+### P0 — Must Fix Before Further Kernel Development (1 Active Finding)
 
-**Included Active Findings:** `F-10` (`F-10B` pending; `F-10A` completed at `9df21f8`), `F-14`  
-*(Note: `F-01` was resolved and verified via Approach 1 in `build.zig` at `515aa91`; `F-10A` extracted the four pure math/layout modules `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig` at `9df21f8`).*
+**Included Active Finding:** `F-10` (`F-10B` pending; `F-10A` completed at `9df21f8`)  
+*(Note: `F-01` was resolved at `515aa91`; `F-10A` extracted the four pure math/layout modules `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig` at `9df21f8`; `F-14` was resolved at `7711468` with unconditional fresh builds, `ReleaseSafe` default optimization, non-recursive build steps, and 3-way kernel ELF SHA-256 provenance verification).*
 
-- **Dependencies:** None (foundational testable kernel module architecture and build/test provenance).
-- **Required Implementation Tasks:**
+- **Dependencies:** None (foundational testable kernel module architecture).
+- **Required Implementation Task:**
   1. **`F-10` (`F-10B` — Stateful Kernel Core Testability):** Building on completed `F-10A`, refactor stateful PMM (`physical.zig`), VMM (`virtual.zig`), and Heap (`heap.zig`) cores with injectable/parameterized backing interfaces so [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig) directly compiles and tests production stateful allocator and paging algorithms on the host.
-  2. **`F-14` (QEMU Test Provenance & Unconditional Rebuild):** Update [`scripts/test-boot.sh`](file:///home/leevawn/Projects/zig-os/scripts/test-boot.sh), [`scripts/run.sh`](file:///home/leevawn/Projects/zig-os/scripts/run.sh), [`scripts/debug.sh`](file:///home/leevawn/Projects/zig-os/scripts/debug.sh), and [`tests/test_boot.py`](file:///home/leevawn/Projects/zig-os/tests/test_boot.py) to unconditionally rebuild `kernel.elf` and `build/zig-os.iso`, unify optimization flags with `scripts/build.sh`, and print the SHA-256 of the tested `kernel.elf`.
 - **Required Regression Tests:**
   - Verify `zig build test` imports production kernel modules (`F-10A` completed for pure modules) and fails when a stateful PMM/VMM/Heap production invariant is broken (`F-10B` pending).
-  - Verify `./scripts/test-boot.sh` rebuilds `build/zig-os.iso` on every invocation and logs the matching `kernel.elf` SHA-256 digest.
-- **Acceptance Criteria:** Verified current-source ISO provenance on every QEMU test run, and host unit tests bound to both pure (`F-10A`) and stateful (`F-10B`) production kernel code.
+- **Acceptance Criteria:** Host unit tests bound to both pure (`F-10A`) and stateful (`F-10B`) production kernel code, verified alongside the completed `F-14` fresh-build and ISO provenance pipeline.
 
 ---
 
