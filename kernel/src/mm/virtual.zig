@@ -3,8 +3,15 @@
 const std = @import("std");
 const cpu = @import("../arch/x86_64/cpu.zig");
 const pmm = @import("physical.zig");
+const paging_math = @import("paging_math.zig");
 
-pub const PAGE_SIZE: u64 = 4096;
+pub const PAGE_SIZE: u64 = paging_math.PAGE_SIZE;
+
+pub const pml4Index = paging_math.pml4Index;
+pub const pdptIndex = paging_math.pdptIndex;
+pub const pdIndex = paging_math.pdIndex;
+pub const ptIndex = paging_math.ptIndex;
+pub const pageOffset = paging_math.pageOffset;
 
 pub const Flags = struct {
     pub const PRESENT: u64 = 1 << 0;
@@ -27,26 +34,6 @@ pub const PageTable = extern struct {
         @memset(&self.entries, 0);
     }
 };
-
-pub inline fn pml4Index(virt: u64) usize {
-    return @intCast((virt >> 39) & 0x1FF);
-}
-
-pub inline fn pdptIndex(virt: u64) usize {
-    return @intCast((virt >> 30) & 0x1FF);
-}
-
-pub inline fn pdIndex(virt: u64) usize {
-    return @intCast((virt >> 21) & 0x1FF);
-}
-
-pub inline fn ptIndex(virt: u64) usize {
-    return @intCast((virt >> 12) & 0x1FF);
-}
-
-pub inline fn pageOffset(virt: u64) usize {
-    return @intCast(virt & 0xFFF);
-}
 
 pub fn getActivePml4() *PageTable {
     const cr3 = cpu.readCr3();

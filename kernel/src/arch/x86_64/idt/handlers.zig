@@ -2,6 +2,9 @@
 const std = @import("std");
 const cpu = @import("../cpu.zig");
 const serial = @import("../../../drivers/serial/serial.zig");
+const page_fault = @import("../interrupts/page_fault.zig");
+
+pub const PageFaultCause = page_fault.PageFaultCause;
 
 pub const InterruptFrame = extern struct {
     // General Purpose Registers pushed by isr_common
@@ -121,17 +124,13 @@ pub fn logException(frame: *const InterruptFrame) void {
         serial.writeHex(cr2);
         serial.writeString("\n[PAGE FAULT] Cause: ");
 
-        const p = (frame.error_code & 1) != 0;
-        const w = (frame.error_code & 2) != 0;
-        const u = (frame.error_code & 4) != 0;
-        const rsvd = (frame.error_code & 8) != 0;
-        const id = (frame.error_code & 16) != 0;
+        const cause = PageFaultCause.decode(frame.error_code);
 
-        if (p) serial.writeString("[protection violation] ") else serial.writeString("[non-present page] ");
-        if (w) serial.writeString("[write access] ") else serial.writeString("[read access] ");
-        if (u) serial.writeString("[user mode] ") else serial.writeString("[kernel mode] ");
-        if (rsvd) serial.writeString("[reserved bit violation] ");
-        if (id) serial.writeString("[instruction fetch (NX)] ");
+        if (cause.protection_violation) serial.writeString("[protection violation] ") else serial.writeString("[non-present page] ");
+        if (cause.write) serial.writeString("[write access] ") else serial.writeString("[read access] ");
+        if (cause.user_mode) serial.writeString("[user mode] ") else serial.writeString("[kernel mode] ");
+        if (cause.reserved_bit) serial.writeString("[reserved bit violation] ");
+        if (cause.instruction_fetch) serial.writeString("[instruction fetch (NX)] ");
         serial.writeString("\n");
     }
 

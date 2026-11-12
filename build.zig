@@ -66,12 +66,33 @@ pub fn build(b: *std.Build) void {
     boot_test_step.dependOn(&test_cmd.step);
 
     // Host Unit Test Step
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/unit_test.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
+    test_mod.addAnonymousImport("paging_math", .{
+        .root_source_file = b.path("kernel/src/mm/paging_math.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
+    test_mod.addAnonymousImport("physical_math", .{
+        .root_source_file = b.path("kernel/src/mm/physical_math.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
+    test_mod.addAnonymousImport("page_fault", .{
+        .root_source_file = b.path("kernel/src/arch/x86_64/interrupts/page_fault.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
+    test_mod.addAnonymousImport("heap_layout", .{
+        .root_source_file = b.path("kernel/src/mm/heap_layout.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
     const unit_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/unit_test.zig"),
-            .target = b.resolveTargetQuery(.{}),
-            .optimize = optimize,
-        }),
+        .root_module = test_mod,
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const unit_test_step = b.step("test", "Run host unit tests");

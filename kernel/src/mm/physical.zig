@@ -3,8 +3,14 @@
 const std = @import("std");
 const limine = @import("../limine.zig");
 const serial = @import("../drivers/serial/serial.zig");
+const physical_math = @import("physical_math.zig");
 
-pub const PAGE_SIZE: u64 = 4096;
+pub const PAGE_SIZE: u64 = physical_math.PAGE_SIZE;
+pub const totalPagesFromBytes = physical_math.totalPagesFromBytes;
+pub const bitmapSizeBytes = physical_math.bitmapSizeBytes;
+pub const physToFrame = physical_math.physToFrame;
+pub const frameToByteIndex = physical_math.frameToByteIndex;
+pub const frameToBitIndex = physical_math.frameToBitIndex;
 
 pub var hhdm_offset: u64 = 0;
 pub var bitmap: [*]u8 = undefined;
@@ -27,20 +33,20 @@ pub inline fn virtToPhys(vaddr: usize) u64 {
 }
 
 inline fn isBitSet(frame: usize) bool {
-    const byte_idx = frame / 8;
-    const bit_idx: u3 = @truncate(frame % 8);
+    const byte_idx = physical_math.frameToByteIndex(frame);
+    const bit_idx = physical_math.frameToBitIndex(frame);
     return (bitmap[byte_idx] & (@as(u8, 1) << bit_idx)) != 0;
 }
 
 inline fn setBit(frame: usize) void {
-    const byte_idx = frame / 8;
-    const bit_idx: u3 = @truncate(frame % 8);
+    const byte_idx = physical_math.frameToByteIndex(frame);
+    const bit_idx = physical_math.frameToBitIndex(frame);
     bitmap[byte_idx] |= (@as(u8, 1) << bit_idx);
 }
 
 inline fn clearBit(frame: usize) void {
-    const byte_idx = frame / 8;
-    const bit_idx: u3 = @truncate(frame % 8);
+    const byte_idx = physical_math.frameToByteIndex(frame);
+    const bit_idx = physical_math.frameToBitIndex(frame);
     bitmap[byte_idx] &= ~(@as(u8, 1) << bit_idx);
 }
 
@@ -65,8 +71,8 @@ pub fn init() void {
         }
     }
 
-    total_pages = @intCast((highest_address + PAGE_SIZE - 1) / PAGE_SIZE);
-    bitmap_size_bytes = (total_pages + 7) / 8;
+    total_pages = physical_math.totalPagesFromBytes(highest_address);
+    bitmap_size_bytes = physical_math.bitmapSizeBytes(total_pages);
 
     // Find a usable region with enough space to hold the allocation bitmap
     var bitmap_phys: ?u64 = null;
@@ -92,8 +98,8 @@ pub fn init() void {
     for (0..memmap.entry_count) |i| {
         const entry = memmap.entries[i];
         if (entry.type == .usable) {
-            const start_frame: usize = @intCast((entry.base + PAGE_SIZE - 1) / PAGE_SIZE);
-            const end_frame: usize = @intCast((entry.base + entry.length) / PAGE_SIZE);
+            const start_frame: usize = physical_math.totalPagesFromBytes(entry.base);
+            const end_frame: usize = physical_math.physToFrame(entry.base + entry.length);
 
             var frame = start_frame;
             while (frame < end_frame and frame < total_pages) : (frame += 1) {
@@ -108,8 +114,8 @@ pub fn init() void {
     }
 
     // Reserve the memory pages occupied by the bitmap itself
-    const bitmap_start_frame: usize = @intCast(bitmap_phys.? / PAGE_SIZE);
-    const bitmap_end_frame: usize = @intCast((bitmap_phys.? + bitmap_size_bytes + PAGE_SIZE - 1) / PAGE_SIZE);
+    const bitmap_start_frame: usize = physical_math.physToFrame(bitmap_phys.?);
+    const bitmap_end_frame: usize = physical_math.totalPagesFromBytes(bitmap_phys.? + bitmap_size_bytes);
 
     var b_frame = bitmap_start_frame;
     while (b_frame < bitmap_end_frame and b_frame < total_pages) : (b_frame += 1) {
@@ -199,7 +205,7 @@ pub fn freePage(paddr: u64) void {
         @panic("PMM: Attempted to free unaligned physical address");
     }
 
-    const frame: usize = @intCast(paddr / PAGE_SIZE);
+    const frame: usize = physical_math.physToFrame(paddr);
     if (frame >= total_pages) {
         @panic("PMM: Physical address out of tracked bounds");
     }
@@ -213,7 +219,7 @@ pub fn freePage(paddr: u64) void {
     used_pages -= 1;
     free_pages += 1;
 
-    const byte_idx = frame / 8;
+    const byte_idx = physical_math.frameToByteIndex(frame);
     if (byte_idx < last_scanned_byte) {
         last_scanned_byte = byte_idx;
     }
@@ -231,7 +237,7 @@ pub fn freePages(paddr: u64, count: usize) void {
 }
 
 pub fn isPageAllocated(paddr: u64) bool {
-    const frame: usize = @intCast(paddr / PAGE_SIZE);
+    const frame: usize = physical_math.physToFrame(paddr);
     if (frame >= total_pages) return true;
     return isBitSet(frame);
 }

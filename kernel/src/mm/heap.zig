@@ -12,17 +12,10 @@ const MAGIC_FREE: u32 = 0x46524545; // 'FREE'
 const MAGIC_USED: u32 = 0x55534544; // 'USED'
 const CANARY: u32 = 0xCAFEBABE;
 
-pub const BlockHeader = extern struct {
-    magic: u32,
-    canary: u32,
-    size: usize,      // Usable payload size in bytes
-    is_free: bool,
-    padding: [7]u8 = [_]u8{ 0, 0, 0, 0, 0, 0, 0 },
-    next: ?*BlockHeader,
-    prev: ?*BlockHeader,
-};
+const heap_layout = @import("heap_layout.zig");
 
-const HEADER_SIZE: usize = @sizeOf(BlockHeader);
+pub const BlockHeader = heap_layout.BlockHeader;
+pub const HEADER_SIZE: usize = heap_layout.HEADER_SIZE;
 
 pub var current_heap_end: u64 = HEAP_START;
 pub var head_block: ?*BlockHeader = null;
