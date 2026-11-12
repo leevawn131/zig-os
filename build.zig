@@ -19,7 +19,25 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const optimize = b.standardOptimizeOption(.{});
+    // Consistent optimization mode across build system and script entrypoints:
+    // uses documented Zig 0.17.1 `b.option` and `b.graph.release_mode` APIs,
+    // defaulting to ReleaseSafe (.safe) while honoring explicit -Doptimize=Debug / ReleaseSafe.
+    const default_optimize: std.builtin.Optimize = switch (b.graph.release_mode) {
+        .off, .any, .safe => .safe,
+        .fast => .fast,
+        .small => .small,
+    };
+    const optimize = b.option(
+        std.builtin.Optimize,
+        "optimize",
+        "Prioritize performance, safety, or binary size (default: ReleaseSafe)",
+    ) orelse default_optimize;
+    const optimize_name = switch (optimize) {
+        .debug => "Debug",
+        .safe => "ReleaseSafe",
+        .fast => "ReleaseFast",
+        .small => "ReleaseSmall",
+    };
 
     const kernel_mod = b.createModule(.{
         .root_source_file = b.path("kernel/src/main.zig"),
@@ -39,28 +57,65 @@ pub fn build(b: *std.Build) void {
     });
 
     kernel.setLinkerScript(b.path("kernel/linker.ld"));
-    b.installArtifact(kernel);
+    const install_kernel = b.addInstallArtifact(kernel, .{});
+    b.getInstallStep().dependOn(&install_kernel.step);
 
-    // Build ISO Step
-    const iso_cmd = b.addSystemCommand(&.{ "bash", "scripts/build.sh", "iso" });
+    const log_optimize = b.addSystemCommand(&.{
+        "printf",
+        "[BUILD] Optimization mode: %s\n",
+        optimize_name,
+    });
+    log_optimize.setName("log optimize");
+    log_optimize.step.dependOn(&install_kernel.step);
+    b.getInstallStep().dependOn(&log_optimize.step);
+
+    // ISO Packaging Step (depends on kernel install; never invokes `zig build` recursively)
+    const iso_cmd = b.addSystemCommand(&.{
+        "bash",
+        "scripts/package-iso.sh",
+        "--optimize",
+        optimize_name,
+    });
+    iso_cmd.setName("package iso");
     iso_cmd.step.dependOn(b.getInstallStep());
     const iso_step = b.step("iso", "Build bootable hybrid ISO image");
     iso_step.dependOn(&iso_cmd.step);
 
     // Run QEMU Step
-    const run_cmd = b.addSystemCommand(&.{ "bash", "scripts/run.sh" });
+    const run_cmd = b.addSystemCommand(&.{
+        "bash",
+        "scripts/lib/qemu-runner.sh",
+        "run",
+        "--optimize",
+        optimize_name,
+    });
+    run_cmd.setName("qemu run");
     run_cmd.step.dependOn(iso_step);
     const run_step = b.step("run", "Boot the OS in QEMU");
     run_step.dependOn(&run_cmd.step);
 
     // Debug QEMU Step
-    const debug_cmd = b.addSystemCommand(&.{ "bash", "scripts/debug.sh" });
+    const debug_cmd = b.addSystemCommand(&.{
+        "bash",
+        "scripts/lib/qemu-runner.sh",
+        "debug",
+        "--optimize",
+        optimize_name,
+    });
+    debug_cmd.setName("qemu debug");
     debug_cmd.step.dependOn(iso_step);
     const debug_step = b.step("debug", "Launch QEMU waiting for GDB on :1234");
     debug_step.dependOn(&debug_cmd.step);
 
     // Smoke Test Step
-    const test_cmd = b.addSystemCommand(&.{ "bash", "scripts/test-boot.sh" });
+    const test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "scripts/lib/qemu-runner.sh",
+        "test-boot",
+        "--optimize",
+        optimize_name,
+    });
+    test_cmd.setName("qemu test-boot");
     test_cmd.step.dependOn(iso_step);
     const boot_test_step = b.step("test-boot", "Run automated boot smoke test");
     boot_test_step.dependOn(&test_cmd.step);

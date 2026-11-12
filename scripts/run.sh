@@ -1,27 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Canonical public run entrypoint: always triggers a fresh build via Zig
+# before verifying ISO provenance and launching QEMU.
+
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ISO="${PROJECT_ROOT}/build/zig-os.iso"
+# shellcheck source=scripts/lib/common.sh
+source "${PROJECT_ROOT}/scripts/lib/common.sh"
 
-if [[ ! -f "${ISO}" ]]; then
-    echo "[RUN] ISO not found. Building first..."
-    "${PROJECT_ROOT}/scripts/build.sh"
-fi
+resolve_optimize_from_args 0 "$@"
+cd "${PROJECT_ROOT}"
 
-echo "[RUN] Launching QEMU (COM1 serial on stdio)..."
-echo "Press Ctrl+A then X to exit QEMU."
+command -v zig >/dev/null 2>&1 || {
+    echo "Error: zig compiler not found" >&2
+    exit 1
+}
 
-DISPLAY_OPT="-display none"
-if [[ -n "${DISPLAY:-}" && "${FORCE_HEADLESS:-0}" == "0" ]]; then
-    # If X11/Wayland display is available and not forced headless, allow standard window
-    DISPLAY_OPT=""
-fi
+echo "[RUN] Triggering fresh build before launching QEMU (optimization: ${ZIG_OS_SELECTED_OPTIMIZE})..."
+zig build -Doptimize="${ZIG_OS_SELECTED_OPTIMIZE}" iso
 
-exec qemu-system-x86_64 \
-    -M q35 \
-    -m 256M \
-    -cdrom "${ISO}" \
-    -serial stdio \
-    ${DISPLAY_OPT} \
-    -no-reboot
+exec bash "${PROJECT_ROOT}/scripts/lib/qemu-runner.sh" run --optimize "${ZIG_OS_SELECTED_OPTIMIZE}"

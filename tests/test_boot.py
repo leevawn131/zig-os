@@ -1,108 +1,80 @@
 #!/usr/bin/env python3
 """
 ZIG-OS Automated Boot Smoke Test Runner.
-Executes QEMU with the generated bootable ISO and validates COM1 serial output against acceptance criteria.
+Delegates directly to the canonical fresh-build boot test script (scripts/test-boot.sh)
+so optimization defaults, fresh-build enforcement, provenance verification, and serial checks
+cannot drift or be bypassed.
 """
 
+import argparse
 import os
 import subprocess
 import sys
-import tempfile
-import time
 
-EXPECTED_BOOT_STRINGS = [
-    "====================================",
-    "ZIG-OS v0.1",
-    "[BOOT] Limine boot protocol initialized.",
-    "[CPU] Architecture: x86_64",
-    "[KERNEL] Zig kernel entry reached.",
-    "[MEMORY] Bootloader memory map received.",
-    "[IDT] 256 interrupt gates configured and verified.",
-    "[PMM] Physical frame allocator initialized and verified.",
-    "[VMM] 4-level paging and translation primitives verified.",
-    "[HEAP] Dynamic memory allocator initialized and verified.",
-    "[STATUS] Kernel initialization complete.",
-    "zig-os:~$"
-]
+OPTIMIZE_ALIASES = {
+    "Debug": "Debug",
+    "debug": "Debug",
+    "ReleaseSafe": "ReleaseSafe",
+    "safe": "ReleaseSafe",
+    "ReleaseFast": "ReleaseFast",
+    "fast": "ReleaseFast",
+    "ReleaseSmall": "ReleaseSmall",
+    "small": "ReleaseSmall",
+}
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build fresh ZIG-OS ISO, verify artifact provenance, and run QEMU smoke test."
+    )
+    parser.add_argument(
+        "--optimize",
+        "-Doptimize",
+        dest="optimize",
+        default=None,
+        help="Optimization mode: Debug, ReleaseSafe (default), ReleaseFast, or ReleaseSmall.",
+    )
+    return parser.parse_args(argv)
+
+
+def normalize_optimize(raw: str) -> str:
+    canonical = OPTIMIZE_ALIASES.get(raw)
+    if canonical is None:
+        raise ValueError(
+            f"Unsupported optimization mode '{raw}'. Expected Debug, ReleaseSafe, ReleaseFast, or ReleaseSmall."
+        )
+    return canonical
+
 
 def main() -> int:
+    args = parse_args(sys.argv[1:])
+
+    raw_optimize = args.optimize or os.environ.get("ZIG_OS_OPTIMIZE") or os.environ.get("OPTIMIZE") or "ReleaseSafe"
+    try:
+        optimize = normalize_optimize(raw_optimize)
+    except ValueError as exc:
+        print(f"[TEST ERROR] {exc}", file=sys.stderr)
+        return 1
+
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    iso_path = os.path.join(repo_root, "build", "zig-os.iso")
+    test_script = os.path.join(repo_root, "scripts", "test-boot.sh")
 
-    if not os.path.exists(iso_path):
-        print(f"[TEST] ISO not found at {iso_path}. Running build script...")
-        build_res = subprocess.run(["bash", os.path.join(repo_root, "scripts", "build.sh")], cwd=repo_root)
-        if build_res.returncode != 0:
-            print("[TEST ERROR] ISO build failed.", file=sys.stderr)
-            return 1
-
-    with tempfile.NamedTemporaryFile(prefix="zig-os-serial-", suffix=".log", delete=False) as tf:
-        log_path = tf.name
-
-    print(f"[TEST] Booting ZIG-OS in QEMU (serial log: {log_path})...")
-
-    qemu_cmd = [
-        "qemu-system-x86_64",
-        "-M", "q35",
-        "-m", "256M",
-        "-cdrom", iso_path,
-        "-serial", f"file:{log_path}",
-        "-display", "none",
-        "-no-reboot"
-    ]
-
-    proc = subprocess.Popen(qemu_cmd)
-    start_time = time.time()
-    success = False
+    if not os.path.isfile(test_script):
+        print(f"[TEST ERROR] Canonical smoke-test script missing: {test_script}", file=sys.stderr)
+        return 1
 
     try:
-        while time.time() - start_time < 10.0:
-            if os.path.exists(log_path):
-                with open(log_path, "r", errors="replace") as f:
-                    content = f.read()
-                if "zig-os:~$" in content:
-                    success = True
-                    break
+        res = subprocess.run(
+            ["bash", test_script, "--optimize", optimize],
+            cwd=repo_root,
+        )
+        return res.returncode
+    except KeyboardInterrupt:
+        return 130
+    except OSError as exc:
+        print(f"[TEST ERROR] Failed to execute canonical smoke-test script: {exc}", file=sys.stderr)
+        return 1
 
-            if proc.poll() is not None:
-                print(f"[TEST ERROR] QEMU terminated unexpectedly with code {proc.returncode}!", file=sys.stderr)
-                break
-
-            time.sleep(0.2)
-
-        # Verify QEMU is still alive (Criterion F: stability check)
-        if proc.poll() is not None:
-            print("[TEST FAIL] Criterion F failed: QEMU did not remain running stably.", file=sys.stderr)
-            return 1
-
-        with open(log_path, "r", errors="replace") as f:
-            captured = f.read()
-
-        print("\n=== Captured Serial Output ===")
-        print(captured)
-        print("==============================\n")
-
-        missing = []
-        for expected in EXPECTED_BOOT_STRINGS:
-            if expected not in captured:
-                missing.append(expected)
-
-        if missing:
-            print(f"[TEST FAIL] Missing required boot markers:\n" + "\n".join(f"  - {m}" for m in missing), file=sys.stderr)
-            return 1
-
-        print("[TEST PASS] All Phase 0 Acceptance Criteria verified successfully!")
-        return 0
-
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        if os.path.exists(log_path):
-            os.remove(log_path)
 
 if __name__ == "__main__":
     sys.exit(main())

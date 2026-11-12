@@ -1,25 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Canonical public debug entrypoint: always triggers a fresh build via Zig
+# before verifying ISO provenance and launching QEMU waiting for GDB on :1234.
+
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ISO="${PROJECT_ROOT}/build/zig-os.iso"
-KERNEL_BIN="${PROJECT_ROOT}/zig-out/bin/kernel.elf"
+# shellcheck source=scripts/lib/common.sh
+source "${PROJECT_ROOT}/scripts/lib/common.sh"
 
-if [[ ! -f "${ISO}" ]]; then
-    echo "[DEBUG] ISO not found. Building first..."
-    "${PROJECT_ROOT}/scripts/build.sh"
-fi
+resolve_optimize_from_args 0 "$@"
+cd "${PROJECT_ROOT}"
 
-echo "[DEBUG] Starting QEMU with GDB stub on localhost:1234..."
-echo "[DEBUG] To connect with GDB, in another terminal run:"
-echo "        gdb -ex \"target remote :1234\" -ex \"symbol-file ${KERNEL_BIN}\""
-echo ""
+command -v zig >/dev/null 2>&1 || {
+    echo "Error: zig compiler not found" >&2
+    exit 1
+}
 
-exec qemu-system-x86_64 \
-    -M q35 \
-    -m 256M \
-    -cdrom "${ISO}" \
-    -serial stdio \
-    -display none \
-    -s -S \
-    -no-reboot
+echo "[DEBUG] Triggering fresh build before starting QEMU GDB session (optimization: ${ZIG_OS_SELECTED_OPTIMIZE})..."
+zig build -Doptimize="${ZIG_OS_SELECTED_OPTIMIZE}" iso
+
+exec bash "${PROJECT_ROOT}/scripts/lib/qemu-runner.sh" debug --optimize "${ZIG_OS_SELECTED_OPTIMIZE}"
