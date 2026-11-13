@@ -2,17 +2,27 @@ const std = @import("std");
 const vectors = @import("vectors");
 const build_options = @import("build_options");
 
+const ViolationKind = enum {
+    forbidden_vector,
+    unresolved_operand,
+};
+
 const ForbiddenIntHit = struct {
     file_path: []const u8,
     line: usize,
-    vector: u8,
+    kind: ViolationKind,
+    vector: ?u8,
+    operand: []const u8,
     snippet: []const u8,
 
     fn deinit(self: *const ForbiddenIntHit, allocator: std.mem.Allocator) void {
         allocator.free(self.file_path);
+        allocator.free(self.operand);
         allocator.free(self.snippet);
     }
 };
+
+const SymbolTable = std.StringHashMapUnmanaged(?u8);
 
 fn deinitHits(allocator: std.mem.Allocator, hits: *std.ArrayList(ForbiddenIntHit)) void {
     for (hits.items) |*hit| {
@@ -21,20 +31,65 @@ fn deinitHits(allocator: std.mem.Allocator, hits: *std.ArrayList(ForbiddenIntHit
     hits.deinit(allocator);
 }
 
+fn deinitSymbolTable(allocator: std.mem.Allocator, constants: *SymbolTable) void {
+    var it = constants.keyIterator();
+    while (it.next()) |key_ptr| {
+        allocator.free(key_ptr.*);
+    }
+    constants.deinit(allocator);
+}
+
+fn putSymbol(
+    allocator: std.mem.Allocator,
+    constants: *SymbolTable,
+    name: []const u8,
+    value: ?u8,
+) !void {
+    const gop = try constants.getOrPut(allocator, name);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = try allocator.dupe(u8, name);
+    }
+    gop.value_ptr.* = value;
+}
+
 fn isIdentChar(ch: u8) bool {
     return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '.';
+}
+
+fn isSymbolChar(ch: u8) bool {
+    return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '.' or ch == '$';
 }
 
 fn isHorizontalSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t';
 }
 
-fn isAsmBoundaryAfterOperand(ch: u8) bool {
-    return isHorizontalSpace(ch) or ch == ';' or ch == '\n' or ch == '\r' or ch == '/' or ch == '#';
+fn matchesKeywordCaseInsensitive(source: []const u8, pos: usize, keyword: []const u8) bool {
+    if (pos + keyword.len > source.len) return false;
+    for (keyword, 0..) |expected, offset| {
+        if (std.ascii.toLower(source[pos + offset]) != std.ascii.toLower(expected)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn findStatementEnd(source: []const u8, start: usize) usize {
+    var i = start;
+    while (i < source.len) : (i += 1) {
+        const ch = source[i];
+        if (ch == ';' or ch == '\n' or ch == '\r' or ch == '#') {
+            return i;
+        }
+        if (ch == '/' and i + 1 < source.len and (source[i + 1] == '/' or source[i + 1] == '*')) {
+            return i;
+        }
+    }
+    return i;
 }
 
 /// Parses decimal (`14`), prefixed hex (`0x0e`), or Intel-suffixed hex (`0Eh`) vector literals,
-/// stripping optional AT&T immediate prefix `$`. Returns null for registers/symbols/out-of-range values.
+/// stripping optional AT&T immediate prefix `$`. Returns null for non-literals or values > 255.
 fn parseVectorLiteral(raw_token: []const u8) ?u8 {
     if (raw_token.len == 0) return null;
 
@@ -43,11 +98,11 @@ fn parseVectorLiteral(raw_token: []const u8) ?u8 {
 
     var parsed: ?u16 = null;
     if (token.len >= 3 and token[0] == '0' and (token[1] == 'x' or token[1] == 'X')) {
-        parsed = parseStrictDigits(token[2..], 16);
+        parsed = parseStrictDigits(u16, token[2..], 16);
     } else if (token.len >= 2 and (token[token.len - 1] == 'h' or token[token.len - 1] == 'H') and std.ascii.isDigit(token[0])) {
-        parsed = parseStrictDigits(token[0 .. token.len - 1], 16);
+        parsed = parseStrictDigits(u16, token[0 .. token.len - 1], 16);
     } else if (std.ascii.isDigit(token[0])) {
-        parsed = parseStrictDigits(token, 10);
+        parsed = parseStrictDigits(u16, token, 10);
     }
 
     const value = parsed orelse return null;
@@ -55,7 +110,7 @@ fn parseVectorLiteral(raw_token: []const u8) ?u8 {
     return @intCast(value);
 }
 
-fn parseStrictDigits(digits: []const u8, radix: u8) ?u16 {
+fn parseStrictDigits(comptime T: type, digits: []const u8, radix: u8) ?T {
     if (digits.len == 0) return null;
     for (digits) |ch| {
         const ok = switch (radix) {
@@ -65,11 +120,90 @@ fn parseStrictDigits(digits: []const u8, radix: u8) ?u16 {
         };
         if (!ok) return null;
     }
-    return std.fmt.parseInt(u16, digits, radix) catch null;
+    return std.fmt.parseInt(T, digits, radix) catch null;
 }
 
-/// Scans an assembly buffer (either a full .s/.S/.asm source file or extracted inline asm string)
-/// for forbidden software `int <vector>` instructions while skipping comments and quoted strings.
+/// Resolves either a numeric immediate (`$14`, `0x0e`, `0Eh`) or a known symbol
+/// defined earlier via `.equ` / `.set` / `.equiv`. Returns null if unresolved.
+fn resolveOperandValue(constants: *const SymbolTable, raw_operand: []const u8) ?u8 {
+    const trimmed = std.mem.trim(u8, raw_operand, " \t");
+    if (trimmed.len == 0) return null;
+
+    if (parseVectorLiteral(trimmed)) |lit| {
+        return lit;
+    }
+
+    const sym = if (trimmed[0] == '$') trimmed[1..] else trimmed;
+    if (sym.len == 0) return null;
+    for (sym) |ch| {
+        if (!isSymbolChar(ch)) return null;
+    }
+
+    if (constants.get(sym)) |maybe_val| {
+        return maybe_val;
+    }
+    return null;
+}
+
+/// Parses `.equ SYMBOL, EXPR`, `.set SYMBOL, EXPR`, or `.equiv SYMBOL, EXPR`
+/// and records the resolved constant (or `null` if expression cannot be resolved).
+fn tryParseEquDirective(
+    allocator: std.mem.Allocator,
+    constants: *SymbolTable,
+    source: []const u8,
+    pos: usize,
+) !?usize {
+    if (pos > 0 and isIdentChar(source[pos - 1])) return null;
+
+    const keywords = [_][]const u8{ ".equiv", ".equ", ".set" };
+    var matched_len: usize = 0;
+    for (keywords) |kw| {
+        if (matchesKeywordCaseInsensitive(source, pos, kw) and
+            pos + kw.len < source.len and
+            isHorizontalSpace(source[pos + kw.len]))
+        {
+            matched_len = kw.len;
+            break;
+        }
+    }
+    if (matched_len == 0) return null;
+
+    const stmt_end = findStatementEnd(source, pos + matched_len);
+    const tail = std.mem.trim(u8, source[pos + matched_len .. stmt_end], " \t");
+    const comma_idx = std.mem.indexOfScalar(u8, tail, ',') orelse return stmt_end;
+
+    const raw_sym = std.mem.trim(u8, tail[0..comma_idx], " \t");
+    const raw_val = std.mem.trim(u8, tail[comma_idx + 1 ..], " \t");
+    if (raw_sym.len == 0) return stmt_end;
+
+    const resolved = resolveOperandValue(constants, raw_val);
+    try putSymbol(allocator, constants, raw_sym, resolved);
+    return stmt_end;
+}
+
+fn appendHit(
+    allocator: std.mem.Allocator,
+    hits: *std.ArrayList(ForbiddenIntHit),
+    file_path: []const u8,
+    line: usize,
+    kind: ViolationKind,
+    vector: ?u8,
+    operand: []const u8,
+    snippet: []const u8,
+) !void {
+    try hits.append(allocator, .{
+        .file_path = try allocator.dupe(u8, file_path),
+        .line = line,
+        .kind = kind,
+        .vector = vector,
+        .operand = try allocator.dupe(u8, operand),
+        .snippet = try allocator.dupe(u8, snippet),
+    });
+}
+
+/// Scans an assembly buffer (full .s/.S/.asm file or decoded Zig inline-asm string)
+/// for forbidden or unresolved `int <operand>` instructions while skipping comments and data strings.
+/// Fails closed whenever an `int` operand cannot be proven to resolve to an allowed vector.
 fn scanAssemblyText(
     allocator: std.mem.Allocator,
     hits: *std.ArrayList(ForbiddenIntHit),
@@ -78,6 +212,9 @@ fn scanAssemblyText(
     advance_lines_on_newline: bool,
     source: []const u8,
 ) !void {
+    var constants: SymbolTable = .empty;
+    defer deinitSymbolTable(allocator, &constants);
+
     var i: usize = 0;
     var line: usize = base_line;
     var in_block_comment = false;
@@ -145,41 +282,39 @@ fn scanAssemblyText(
             continue;
         }
 
-        // Match whole mnemonic `int` (case-insensitive) followed by horizontal whitespace + vector operand
-        if (i + 3 < source.len and
-            std.ascii.toLower(source[i]) == 'i' and
-            std.ascii.toLower(source[i + 1]) == 'n' and
-            std.ascii.toLower(source[i + 2]) == 't' and
+        // Track `.equ`, `.set`, and `.equiv` absolute constant definitions
+        if (ch == '.') {
+            if (try tryParseEquDirective(allocator, &constants, source, i)) |stmt_end| {
+                i = stmt_end;
+                continue;
+            }
+        }
+
+        // Match whole mnemonic `int` followed by horizontal space and evaluate operand fail-closed
+        if (matchesKeywordCaseInsensitive(source, i, "int") and
+            i + 3 < source.len and
             isHorizontalSpace(source[i + 3]) and
             (i == 0 or !isIdentChar(source[i - 1])))
         {
             var op_start = i + 3;
             while (op_start < source.len and isHorizontalSpace(source[op_start])) : (op_start += 1) {}
 
-            var op_end = op_start;
-            while (op_end < source.len and
-                (std.ascii.isAlphanumeric(source[op_end]) or source[op_end] == '$' or source[op_end] == '_'))
-            {
-                op_end += 1;
-            }
+            const stmt_end = findStatementEnd(source, op_start);
+            const raw_operand = std.mem.trim(u8, source[op_start..stmt_end], " \t");
 
-            if (op_end > op_start and (op_end == source.len or isAsmBoundaryAfterOperand(source[op_end]))) {
-                if (parseVectorLiteral(source[op_start..op_end])) |vec| {
-                    if (vectors.isForbiddenSoftwareIntVector(vec)) {
-                        var line_end = i;
-                        while (line_end < source.len and source[line_end] != '\n' and source[line_end] != '\r') : (line_end += 1) {}
-                        const raw_snippet = std.mem.trim(u8, source[line_start..line_end], " \t");
-                        try hits.append(allocator, .{
-                            .file_path = try allocator.dupe(u8, file_path),
-                            .line = line,
-                            .vector = vec,
-                            .snippet = try allocator.dupe(u8, raw_snippet),
-                        });
-                    }
+            var line_end = i;
+            while (line_end < source.len and source[line_end] != '\n' and source[line_end] != '\r') : (line_end += 1) {}
+            const raw_snippet = std.mem.trim(u8, source[line_start..line_end], " \t");
+
+            if (resolveOperandValue(&constants, raw_operand)) |vec| {
+                if (vectors.isForbiddenSoftwareIntVector(vec)) {
+                    try appendHit(allocator, hits, file_path, line, .forbidden_vector, vec, raw_operand, raw_snippet);
                 }
+            } else {
+                try appendHit(allocator, hits, file_path, line, .unresolved_operand, null, raw_operand, raw_snippet);
             }
 
-            i += 3;
+            i = stmt_end;
             continue;
         }
 
@@ -187,7 +322,85 @@ fn scanAssemblyText(
     }
 }
 
-/// Scans a Zig source file, ignoring `//` comments and character literals while extracting
+/// Decodes a Zig single-line string literal (`"..."`), returning the decoded bytes and the index after closing `"`.
+/// Supports `\n`, `\r`, `\t`, `\\`, `\"`, `\'`, `\xNN`, and `\u{...}` (encoded to UTF-8).
+fn decodeZigStringLiteral(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    after_open_quote: usize,
+    decoded: *std.ArrayList(u8),
+) !struct { next_index: usize, hit_newline: bool } {
+    var i = after_open_quote;
+    while (i < source.len) {
+        if (source[i] == '\\' and i + 1 < source.len) {
+            const esc = source[i + 1];
+            switch (esc) {
+                'n' => {
+                    try decoded.append(allocator, '\n');
+                    i += 2;
+                },
+                'r' => {
+                    try decoded.append(allocator, '\r');
+                    i += 2;
+                },
+                't' => {
+                    try decoded.append(allocator, '\t');
+                    i += 2;
+                },
+                '\\', '"', '\'' => {
+                    try decoded.append(allocator, esc);
+                    i += 2;
+                },
+                'x' => {
+                    if (i + 3 < source.len) {
+                        if (parseStrictDigits(u8, source[i + 2 .. i + 4], 16)) |byte| {
+                            try decoded.append(allocator, byte);
+                            i += 4;
+                            continue;
+                        }
+                    }
+                    try decoded.appendSlice(allocator, source[i .. i + 2]);
+                    i += 2;
+                },
+                'u' => {
+                    if (i + 2 < source.len and source[i + 2] == '{') {
+                        var close = i + 3;
+                        while (close < source.len and source[close] != '}' and source[close] != '"' and source[close] != '\n') : (close += 1) {}
+                        if (close < source.len and source[close] == '}') {
+                            const hex = source[i + 3 .. close];
+                            if (parseStrictDigits(u21, hex, 16)) |cp| {
+                                var utf8_buf: [4]u8 = undefined;
+                                if (std.unicode.utf8Encode(cp, &utf8_buf)) |len| {
+                                    try decoded.appendSlice(allocator, utf8_buf[0..len]);
+                                    i = close + 1;
+                                    continue;
+                                } else |_| {}
+                            }
+                        }
+                    }
+                    try decoded.appendSlice(allocator, source[i .. i + 2]);
+                    i += 2;
+                },
+                else => {
+                    try decoded.append(allocator, esc);
+                    i += 2;
+                },
+            }
+            continue;
+        }
+        if (source[i] == '\n') {
+            return .{ .next_index = i + 1, .hit_newline = true };
+        }
+        if (source[i] == '"') {
+            return .{ .next_index = i + 1, .hit_newline = false };
+        }
+        try decoded.append(allocator, source[i]);
+        i += 1;
+    }
+    return .{ .next_index = i, .hit_newline = false };
+}
+
+/// Scans a Zig source file, ignoring `//` comments and character literals while decoding
 /// single-line `"..."` strings and contiguous multiline `\\...` blocks for assembly scanning.
 fn scanZigSource(
     allocator: std.mem.Allocator,
@@ -240,32 +453,9 @@ fn scanZigSource(
             var decoded: std.ArrayList(u8) = .empty;
             defer decoded.deinit(allocator);
 
-            i += 1;
-            while (i < source.len) {
-                if (source[i] == '\\' and i + 1 < source.len) {
-                    const esc = source[i + 1];
-                    switch (esc) {
-                        'n' => try decoded.append(allocator, '\n'),
-                        'r' => try decoded.append(allocator, '\r'),
-                        't' => try decoded.append(allocator, '\t'),
-                        '\\', '"', '\'' => try decoded.append(allocator, esc),
-                        else => try decoded.append(allocator, esc),
-                    }
-                    i += 2;
-                    continue;
-                }
-                if (source[i] == '\n') {
-                    line += 1;
-                    i += 1;
-                    break;
-                }
-                if (source[i] == '"') {
-                    i += 1;
-                    break;
-                }
-                try decoded.append(allocator, source[i]);
-                i += 1;
-            }
+            const res = try decodeZigStringLiteral(allocator, source, i + 1, &decoded);
+            i = res.next_index;
+            if (res.hit_newline) line += 1;
 
             try scanAssemblyText(allocator, hits, file_path, start_line, false, decoded.items);
             continue;
@@ -292,7 +482,6 @@ fn scanZigSource(
                     break;
                 }
 
-                // Check if next line continues the multiline string literal block
                 var lookahead = i;
                 while (lookahead < source.len and (source[lookahead] == ' ' or source[lookahead] == '\t' or source[lookahead] == '\r')) : (lookahead += 1) {}
                 if (lookahead + 1 < source.len and source[lookahead] == '\\' and source[lookahead + 1] == '\\') {
@@ -381,20 +570,16 @@ test "vectors 4: legacy 8259 PIC vector offset validation" {
     try std.testing.expect(vectors.isPicOffsetValid(0x30, 0xF8));
     try std.testing.expect(vectors.isPicOffsetValid(0xF0, 0xF8));
 
-    // Legacy BIOS PIC offsets overlap architectural exceptions 0x08..0x0F
     try std.testing.expect(!vectors.isPicOffsetValid(0x08, 0x70));
     try std.testing.expect(!vectors.isPicOffsetValid(0x00, 0x08));
     try std.testing.expect(!vectors.isPicOffsetValid(0x18, 0x20));
 
-    // Unaligned offsets
     try std.testing.expect(!vectors.isPicOffsetValid(0x21, 0x28));
     try std.testing.expect(!vectors.isPicOffsetValid(0x20, 0x2C));
 
-    // Overlapping master and slave 8-vector windows
     try std.testing.expect(!vectors.isPicOffsetValid(0x20, 0x20));
     try std.testing.expect(!vectors.isPicOffsetValid(0x30, 0x30));
 
-    // Out-of-bounds wrap beyond vector 255
     try std.testing.expect(!vectors.isPicOffsetValid(0xFA, 0x20));
     try std.testing.expect(!vectors.isPicOffsetValid(0x20, 0xF9));
 }
@@ -406,14 +591,12 @@ test "vectors 5: pure IDT kernel interrupt gate validator checks flags, IST rese
     try std.testing.expect(vectors.isValidKernelInterruptGate(vectors.IDT_GATE_FLAGS_KERNEL_INTERRUPT, 0, 0, cs, cs, addr, addr));
     try std.testing.expect(vectors.isValidKernelInterruptGate(0x8E, 7, 0, cs, cs, addr, addr));
 
-    // Wrong DPL / Present / Type / S-bit
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0xEE, 0, 0, cs, cs, addr, addr)); // DPL=3
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0xAE, 0, 0, cs, cs, addr, addr)); // DPL=1
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x0E, 0, 0, cs, cs, addr, addr)); // Not Present
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8F, 0, 0, cs, cs, addr, addr)); // Trap Gate instead of Interrupt Gate
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x9E, 0, 0, cs, cs, addr, addr)); // Storage bit set
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0xEE, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0xAE, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x0E, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8F, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x9E, 0, 0, cs, cs, addr, addr));
 
-    // Reserved upper IST bits / reserved field / selector / offset mismatch
     try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 8, 0, cs, cs, addr, addr));
     try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 0, 1, cs, cs, addr, addr));
     try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 0, 0, 0x08, cs, addr, addr));
@@ -423,7 +606,6 @@ test "vectors 5: pure IDT kernel interrupt gate validator checks flags, IST rese
 test "scanner 1: assembly scanner detects forbidden INT n in decimal/hex/AT&T/Intel while ignoring comments and strings" {
     const gpa = std.testing.allocator;
 
-    // Clean fixture: comments, strings, identifiers, int $3 (#BP), int >= 32
     const clean_asm =
         \\// int $14 should be ignored
         \\# int 13 should also be ignored
@@ -443,7 +625,6 @@ test "scanner 1: assembly scanner detects forbidden INT n in decimal/hex/AT&T/In
     try scanAssemblyText(gpa, &clean_hits, "synthetic_clean.s", 1, true, clean_asm);
     try std.testing.expectEqual(@as(usize, 0), clean_hits.items.len);
 
-    // Negative fixture: multiple encodings of forbidden vectors
     const bad_asm =
         \\    nop
         \\    int $14
@@ -459,19 +640,20 @@ test "scanner 1: assembly scanner detects forbidden INT n in decimal/hex/AT&T/In
     try std.testing.expectEqual(@as(usize, 5), bad_hits.items.len);
 
     try std.testing.expectEqual(@as(usize, 2), bad_hits.items[0].line);
-    try std.testing.expectEqual(@as(u8, 14), bad_hits.items[0].vector);
+    try std.testing.expectEqual(ViolationKind.forbidden_vector, bad_hits.items[0].kind);
+    try std.testing.expectEqual(@as(?u8, 14), bad_hits.items[0].vector);
 
     try std.testing.expectEqual(@as(usize, 4), bad_hits.items[1].line);
-    try std.testing.expectEqual(@as(u8, 14), bad_hits.items[1].vector);
+    try std.testing.expectEqual(@as(?u8, 14), bad_hits.items[1].vector);
 
     try std.testing.expectEqual(@as(usize, 5), bad_hits.items[2].line);
-    try std.testing.expectEqual(@as(u8, 14), bad_hits.items[2].vector);
+    try std.testing.expectEqual(@as(?u8, 14), bad_hits.items[2].vector);
 
     try std.testing.expectEqual(@as(usize, 6), bad_hits.items[3].line);
-    try std.testing.expectEqual(@as(u8, 8), bad_hits.items[3].vector);
+    try std.testing.expectEqual(@as(?u8, 8), bad_hits.items[3].vector);
 
     try std.testing.expectEqual(@as(usize, 7), bad_hits.items[4].line);
-    try std.testing.expectEqual(@as(u8, 1), bad_hits.items[4].vector);
+    try std.testing.expectEqual(@as(?u8, 1), bad_hits.items[4].vector);
 }
 
 test "scanner 2: Zig inline-asm scanner inspects string literals and multiline \\\\ blocks accurately" {
@@ -511,16 +693,116 @@ test "scanner 2: Zig inline-asm scanner inspects string literals and multiline \
     try std.testing.expectEqual(@as(usize, 3), bad_hits.items.len);
 
     try std.testing.expectEqual(@as(usize, 2), bad_hits.items[0].line);
-    try std.testing.expectEqual(@as(u8, 14), bad_hits.items[0].vector);
+    try std.testing.expectEqual(@as(?u8, 14), bad_hits.items[0].vector);
 
     try std.testing.expectEqual(@as(usize, 5), bad_hits.items[1].line);
-    try std.testing.expectEqual(@as(u8, 13), bad_hits.items[1].vector);
+    try std.testing.expectEqual(@as(?u8, 13), bad_hits.items[1].vector);
 
     try std.testing.expectEqual(@as(usize, 7), bad_hits.items[2].line);
-    try std.testing.expectEqual(@as(u8, 8), bad_hits.items[2].vector);
+    try std.testing.expectEqual(@as(?u8, 8), bad_hits.items[2].vector);
 }
 
-test "scanner 3: live kernel/ source tree contains zero forbidden software INT instructions" {
+test "scanner 3 (Finding A): resolves .equ/.set constants and fails closed on unresolved INT operands" {
+    const gpa = std.testing.allocator;
+
+    // 1. `.equ BAD_VECTOR, 14` followed by `int $BAD_VECTOR`
+    const equ_bad =
+        \\.equ BAD_VECTOR, 14
+        \\int $BAD_VECTOR
+    ;
+    var equ_hits: std.ArrayList(ForbiddenIntHit) = .empty;
+    defer deinitHits(gpa, &equ_hits);
+    try scanAssemblyText(gpa, &equ_hits, "synthetic_equ.s", 1, true, equ_bad);
+    try std.testing.expectEqual(@as(usize, 1), equ_hits.items.len);
+    try std.testing.expectEqual(@as(usize, 2), equ_hits.items[0].line);
+    try std.testing.expectEqual(ViolationKind.forbidden_vector, equ_hits.items[0].kind);
+    try std.testing.expectEqual(@as(?u8, 14), equ_hits.items[0].vector);
+
+    // 2. `.set BAD_VECTOR, 0x0e` followed by `int $BAD_VECTOR` (plus safe redefinition case)
+    const set_bad =
+        \\.set SAFE_VEC, 32
+        \\int $SAFE_VEC
+        \\.set BAD_VECTOR, 0x0e
+        \\int $BAD_VECTOR
+        \\.set SAFE_VEC, 14
+        \\int $SAFE_VEC
+    ;
+    var set_hits: std.ArrayList(ForbiddenIntHit) = .empty;
+    defer deinitHits(gpa, &set_hits);
+    try scanAssemblyText(gpa, &set_hits, "synthetic_set.s", 1, true, set_bad);
+    try std.testing.expectEqual(@as(usize, 2), set_hits.items.len);
+    try std.testing.expectEqual(@as(usize, 4), set_hits.items[0].line);
+    try std.testing.expectEqual(ViolationKind.forbidden_vector, set_hits.items[0].kind);
+    try std.testing.expectEqual(@as(?u8, 14), set_hits.items[0].vector);
+    try std.testing.expectEqual(@as(usize, 6), set_hits.items[1].line);
+    try std.testing.expectEqual(@as(?u8, 14), set_hits.items[1].vector);
+
+    // 3. Unresolved symbol/template/expression operands must fail closed
+    const unresolved_asm =
+        \\int $3
+        \\int $32
+        \\int $UNKNOWN_SYMBOL
+        \\int UNKNOWN_INTEL_SYM
+        \\int %[vec]
+        \\int 14 + 0
+    ;
+    var unresolved_hits: std.ArrayList(ForbiddenIntHit) = .empty;
+    defer deinitHits(gpa, &unresolved_hits);
+    try scanAssemblyText(gpa, &unresolved_hits, "synthetic_unresolved.s", 1, true, unresolved_asm);
+    try std.testing.expectEqual(@as(usize, 4), unresolved_hits.items.len);
+
+    try std.testing.expectEqual(@as(usize, 3), unresolved_hits.items[0].line);
+    try std.testing.expectEqual(ViolationKind.unresolved_operand, unresolved_hits.items[0].kind);
+    try std.testing.expectEqual(@as(?u8, null), unresolved_hits.items[0].vector);
+
+    try std.testing.expectEqual(@as(usize, 4), unresolved_hits.items[1].line);
+    try std.testing.expectEqual(ViolationKind.unresolved_operand, unresolved_hits.items[1].kind);
+
+    try std.testing.expectEqual(@as(usize, 5), unresolved_hits.items[2].line);
+    try std.testing.expectEqual(ViolationKind.unresolved_operand, unresolved_hits.items[2].kind);
+
+    try std.testing.expectEqual(@as(usize, 6), unresolved_hits.items[3].line);
+    try std.testing.expectEqual(ViolationKind.unresolved_operand, unresolved_hits.items[3].kind);
+}
+
+test "scanner 4 (Finding B): Zig string escape decoding detects \\xNN and \\u{...} encoded INT vectors" {
+    const gpa = std.testing.allocator;
+
+    const escaped_zig =
+        \\fn escapes() void {
+        \\    asm volatile ("int $3");
+        \\    asm volatile ("\x69\x6e\x74 \x24\x33");
+        \\    asm volatile ("\x69nt $14");
+        \\    asm volatile ("\u{69}nt $14");
+        \\    asm volatile ("\x69\x6e\x74 $0x0e");
+        \\    asm volatile ("\u{69}nt $UNKNOWN_ESC_SYM");
+        \\}
+    ;
+    var hits: std.ArrayList(ForbiddenIntHit) = .empty;
+    defer deinitHits(gpa, &hits);
+    try scanZigSource(gpa, &hits, "synthetic_escapes.zig", escaped_zig);
+
+    // Lines 2 and 3 decode to valid `int $3`; lines 4, 5, 6 decode to vector 14; line 7 fails closed.
+    try std.testing.expectEqual(@as(usize, 4), hits.items.len);
+
+    try std.testing.expectEqual(@as(usize, 4), hits.items[0].line);
+    try std.testing.expectEqual(ViolationKind.forbidden_vector, hits.items[0].kind);
+    try std.testing.expectEqual(@as(?u8, 14), hits.items[0].vector);
+
+    try std.testing.expectEqual(@as(usize, 5), hits.items[1].line);
+    try std.testing.expectEqual(ViolationKind.forbidden_vector, hits.items[1].kind);
+    try std.testing.expectEqual(@as(?u8, 14), hits.items[1].vector);
+
+    try std.testing.expectEqual(@as(usize, 6), hits.items[2].line);
+    try std.testing.expectEqual(ViolationKind.forbidden_vector, hits.items[2].kind);
+    try std.testing.expectEqual(@as(?u8, 14), hits.items[2].vector);
+
+    try std.testing.expectEqual(@as(usize, 7), hits.items[3].line);
+    try std.testing.expectEqual(ViolationKind.unresolved_operand, hits.items[3].kind);
+    try std.testing.expectEqual(@as(?u8, null), hits.items[3].vector);
+}
+
+test "scanner 5: live kernel/ source tree contains zero forbidden or unresolved software INT instructions" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 
@@ -554,8 +836,8 @@ test "scanner 3: live kernel/ source tree contains zero forbidden software INT i
     if (hits.items.len > 0) {
         for (hits.items) |hit| {
             std.debug.print(
-                "FORBIDDEN SOFTWARE INT at kernel/{s}:{d} (vector {d}): {s}\n",
-                .{ hit.file_path, hit.line, hit.vector, hit.snippet },
+                "FORBIDDEN/UNRESOLVED SOFTWARE INT ({s}) at kernel/{s}:{d} (vector={?d}, operand='{s}'): {s}\n",
+                .{ @tagName(hit.kind), hit.file_path, hit.line, hit.vector, hit.operand, hit.snippet },
             );
         }
     }
