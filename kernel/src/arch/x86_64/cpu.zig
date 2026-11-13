@@ -1,5 +1,7 @@
 // Low-level x86_64 CPU instructions, control registers, and port I/O
 
+pub const sse = @import("sse.zig");
+
 pub inline fn outb(port: u16, val: u8) void {
     asm volatile ("outb %[val], %[port]"
         :
@@ -114,18 +116,57 @@ pub inline fn writeCr4(val: u64) void {
     );
 }
 
+/// Initialize x86_64 FPU/SSE support by clearing CR0.EM (bit 2) and CR0.TS (bit 3),
+/// setting CR0.MP (bit 1), and setting CR4.OSFXSR (bit 9) and CR4.OSXMMEXCPT (bit 10).
 pub inline fn enableSse() void {
-    // Clear CR0.EM (bit 2), set CR0.MP (bit 1)
-    var cr0 = readCr0();
-    cr0 &= ~@as(u64, 1 << 2);
-    cr0 |= (1 << 1);
-    writeCr0(cr0);
+    // Clear CR0.EM (bit 2) and CR0.TS (bit 3), set CR0.MP (bit 1)
+    writeCr0(sse.computeSseCr0(readCr0()));
 
     // Set CR4.OSFXSR (bit 9) and CR4.OSXMMEXCPT (bit 10)
-    var cr4 = readCr4();
-    cr4 |= (1 << 9);
-    cr4 |= (1 << 10);
-    writeCr4(cr4);
+    writeCr4(sse.computeSseCr4(readCr4()));
+}
+
+/// Ring 0 regression test verifying enableSse() clears CR0.TS and CR0.EM while
+/// setting CR0.MP, CR4.OSFXSR, and CR4.OSXMMEXCPT and preserving unrelated control bits.
+pub fn testSseCr0Init() bool {
+    const boot_cr0 = readCr0();
+    const boot_cr4 = readCr4();
+    if (!sse.isSseCr0Valid(boot_cr0) or !sse.isSseCr4Valid(boot_cr4)) {
+        return false;
+    }
+
+    const saved_rflags = readRflags();
+    const was_if_set = (saved_rflags & (@as(u64, 1) << 9)) != 0;
+    cli();
+
+    // Confirm maskable interrupts are disabled before mutating CR0
+    if ((readRflags() & (@as(u64, 1) << 9)) != 0) {
+        return false;
+    }
+
+    // Deliberately set CR0.TS=1 and CR0.EM=1 immediately before calling enableSse()
+    // with zero intervening FPU/SSE instructions.
+    const baseline_cr0 = readCr0();
+    const baseline_cr4 = readCr4();
+    writeCr0(baseline_cr0 | sse.CR0_EM_BIT | sse.CR0_TS_BIT);
+    enableSse();
+
+    const actual_cr0 = readCr0();
+    const actual_cr4 = readCr4();
+
+    if (was_if_set) {
+        sti();
+    }
+
+    const cr0_preserved_mask: u64 = ~(sse.CR0_MP_BIT | sse.CR0_EM_BIT | sse.CR0_TS_BIT);
+    const cr4_preserved_mask: u64 = ~(sse.CR4_OSFXSR_BIT | sse.CR4_OSXMMEXCPT_BIT);
+    const cr0_preserved_ok = (actual_cr0 & cr0_preserved_mask) == (baseline_cr0 & cr0_preserved_mask);
+    const cr4_preserved_ok = (actual_cr4 & cr4_preserved_mask) == (baseline_cr4 & cr4_preserved_mask);
+
+    return sse.isSseCr0Valid(actual_cr0) and
+        sse.isSseCr4Valid(actual_cr4) and
+        cr0_preserved_ok and
+        cr4_preserved_ok;
 }
 
 pub inline fn readRflags() u64 {

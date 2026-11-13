@@ -7,6 +7,7 @@ const paging_math = @import("paging_math");
 const physical_math = @import("physical_math");
 const page_fault = @import("page_fault");
 const heap_layout = @import("heap_layout");
+const sse = @import("sse");
 
 // 1. Virtual memory address bitfield decomposition tests
 test "VMM address decomposition for higher-half kernel base" {
@@ -219,4 +220,70 @@ test "Heap block header layout and alignment" {
     // Header size rounded up to 16 bytes for 16-byte payload alignment
     const aligned_hdr = (heap_layout.HEADER_SIZE + 15) & ~@as(usize, 15);
     try testing.expectEqual(@as(usize, 48), aligned_hdr);
+}
+
+// 5. SSE control register (CR0 / CR4) initialization helper tests (F-15)
+test "CR0 SSE initialization clears EM and TS, sets MP, and preserves unrelated bits" {
+    const cr0_pe: u64 = 1 << 0;
+    const cr0_ne: u64 = 1 << 5;
+    const cr0_wp: u64 = 1 << 16;
+    const cr0_pg: u64 = 1 << 31;
+    const base_arch_bits: u64 = cr0_pe | cr0_ne | cr0_wp | cr0_pg;
+    const unrelated_mask: u64 = ~(sse.CR0_MP_BIT | sse.CR0_EM_BIT | sse.CR0_TS_BIT);
+
+    // Case 1: Both EM and TS initially set (MP initially clear)
+    const initial_both = base_arch_bits | sse.CR0_EM_BIT | sse.CR0_TS_BIT;
+    const out_both = sse.computeSseCr0(initial_both);
+    try testing.expectEqual(base_arch_bits | sse.CR0_MP_BIT, out_both);
+    try testing.expect(sse.isSseCr0Valid(out_both));
+
+    // Case 2: EM set, TS clear
+    const initial_em = base_arch_bits | sse.CR0_EM_BIT;
+    const out_em = sse.computeSseCr0(initial_em);
+    try testing.expectEqual(base_arch_bits | sse.CR0_MP_BIT, out_em);
+    try testing.expect(sse.isSseCr0Valid(out_em));
+
+    // Case 3: EM clear, TS set (typical Limine / task-switch residual state)
+    const initial_ts = base_arch_bits | sse.CR0_TS_BIT;
+    const out_ts = sse.computeSseCr0(initial_ts);
+    try testing.expectEqual(base_arch_bits | sse.CR0_MP_BIT, out_ts);
+    try testing.expect(sse.isSseCr0Valid(out_ts));
+
+    // Case 4: Both EM and TS clear (with MP=0 and with MP=1)
+    const out_clear_no_mp = sse.computeSseCr0(base_arch_bits);
+    try testing.expectEqual(base_arch_bits | sse.CR0_MP_BIT, out_clear_no_mp);
+    try testing.expect(sse.isSseCr0Valid(out_clear_no_mp));
+
+    const out_clear_with_mp = sse.computeSseCr0(base_arch_bits | sse.CR0_MP_BIT);
+    try testing.expectEqual(base_arch_bits | sse.CR0_MP_BIT, out_clear_with_mp);
+    try testing.expect(sse.isSseCr0Valid(out_clear_with_mp));
+
+    // Case 5: Preservation of unrelated bits across extreme bit patterns
+    try testing.expectEqual(sse.CR0_MP_BIT, sse.computeSseCr0(0));
+    const all_bits = std.math.maxInt(u64);
+    const expected_max = (all_bits & ~(sse.CR0_EM_BIT | sse.CR0_TS_BIT));
+    const out_max = sse.computeSseCr0(all_bits);
+    try testing.expectEqual(expected_max, out_max);
+    try testing.expectEqual(all_bits & unrelated_mask, out_max & unrelated_mask);
+    try testing.expect(sse.isSseCr0Valid(out_max));
+
+    // Case 6: MP is always set and validator rejects any invalid CR0 combination
+    try testing.expect((sse.computeSseCr0(0) & sse.CR0_MP_BIT) != 0);
+    try testing.expect(!sse.isSseCr0Valid(base_arch_bits)); // MP=0
+    try testing.expect(!sse.isSseCr0Valid(base_arch_bits | sse.CR0_MP_BIT | sse.CR0_EM_BIT)); // EM=1
+    try testing.expect(!sse.isSseCr0Valid(base_arch_bits | sse.CR0_MP_BIT | sse.CR0_TS_BIT)); // TS=1
+    try testing.expect(!sse.isSseCr0Valid(base_arch_bits | sse.CR0_MP_BIT | sse.CR0_EM_BIT | sse.CR0_TS_BIT));
+}
+
+test "CR4 SSE initialization sets OSFXSR and OSXMMEXCPT and preserves unrelated bits" {
+    const cr4_pae: u64 = 1 << 5;
+    const cr4_pge: u64 = 1 << 7;
+    const base_cr4 = cr4_pae | cr4_pge;
+
+    const out_cr4 = sse.computeSseCr4(base_cr4);
+    try testing.expectEqual(base_cr4 | sse.CR4_OSFXSR_BIT | sse.CR4_OSXMMEXCPT_BIT, out_cr4);
+    try testing.expect(sse.isSseCr4Valid(out_cr4));
+    try testing.expect(!sse.isSseCr4Valid(base_cr4));
+    try testing.expect(!sse.isSseCr4Valid(base_cr4 | sse.CR4_OSFXSR_BIT));
+    try testing.expect(!sse.isSseCr4Valid(base_cr4 | sse.CR4_OSXMMEXCPT_BIT));
 }

@@ -146,6 +146,11 @@ pub fn build(b: *std.Build) void {
         .target = b.resolveTargetQuery(.{}),
         .optimize = optimize,
     });
+    test_mod.addAnonymousImport("sse", .{
+        .root_source_file = b.path("kernel/src/arch/x86_64/sse.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
     const unit_tests = b.addTest(.{
         .root_module = test_mod,
     });

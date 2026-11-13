@@ -36,6 +36,11 @@ export fn _start() callconv(.c) noreturn {
     serial.writeString("\n");
     serial.writeString("[BOOT] Limine boot protocol initialized.\n");
     serial.writeString("[CPU] Architecture: x86_64\n");
+    if (!cpu.testSseCr0Init()) {
+        serial.writeString("[FATAL] CPU SSE/CR0.TS initialization self-test failed.\n");
+        cpu.haltLoop();
+    }
+    serial.writeString("[CPU] SSE/CR0.TS initialization verified.\n");
     serial.writeString("[KERNEL] Zig kernel entry reached.\n");
 
     // 6. Inspect Limine bootloader memory map
