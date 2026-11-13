@@ -1,38 +1,46 @@
-// Virtual Memory Manager (VMM)
-// 4-level x86_64 paging, page table management, and address translation
-const std = @import("std");
+// Virtual Memory Manager (VMM) Kernel Adapter
+// Binds x86_64 CR3, HHDM table resolution, PMM table allocation, and `cpu.invlpg`
+// to the shared hardware-independent VMM core.
 const cpu = @import("../arch/x86_64/cpu.zig");
 const pmm = @import("physical.zig");
-const paging_math = @import("paging_math.zig");
+const virtual_core = @import("virtual_core.zig");
 
-pub const PAGE_SIZE: u64 = paging_math.PAGE_SIZE;
+pub const PAGE_SIZE: u64 = virtual_core.PAGE_SIZE;
 
-pub const pml4Index = paging_math.pml4Index;
-pub const pdptIndex = paging_math.pdptIndex;
-pub const pdIndex = paging_math.pdIndex;
-pub const ptIndex = paging_math.ptIndex;
-pub const pageOffset = paging_math.pageOffset;
+pub const pml4Index = virtual_core.pml4Index;
+pub const pdptIndex = virtual_core.pdptIndex;
+pub const pdIndex = virtual_core.pdIndex;
+pub const ptIndex = virtual_core.ptIndex;
+pub const pageOffset = virtual_core.pageOffset;
+pub const isCanonical = virtual_core.isCanonical;
 
-pub const Flags = struct {
-    pub const PRESENT: u64 = 1 << 0;
-    pub const WRITABLE: u64 = 1 << 1;
-    pub const USER: u64 = 1 << 2;
-    pub const WRITE_THROUGH: u64 = 1 << 3;
-    pub const NO_CACHE: u64 = 1 << 4;
-    pub const ACCESSED: u64 = 1 << 5;
-    pub const DIRTY: u64 = 1 << 6;
-    pub const HUGE: u64 = 1 << 7;
-    pub const GLOBAL: u64 = 1 << 8;
-    pub const NO_EXECUTE: u64 = 1 << 63;
-    pub const PHYS_ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
-};
+pub const Flags = virtual_core.Flags;
+pub const PageTable = virtual_core.PageTable;
+pub const MapError = virtual_core.MapError;
+pub const UnmapError = virtual_core.UnmapError;
 
-pub const PageTable = extern struct {
-    entries: [512]u64,
+fn kernelResolveTable(_: ?*anyopaque, table_phys: u64) *PageTable {
+    return @ptrCast(@alignCast(pmm.physToVirt(table_phys)));
+}
 
-    pub fn clear(self: *PageTable) void {
-        @memset(&self.entries, 0);
-    }
+fn kernelAllocTable(_: ?*anyopaque) ?u64 {
+    return pmm.allocPage();
+}
+
+fn kernelFreeTable(_: ?*anyopaque, table_phys: u64) void {
+    pmm.freePage(table_phys);
+}
+
+fn kernelInvlpg(_: ?*anyopaque, virt: u64) void {
+    cpu.invlpg(virt);
+}
+
+const kernel_backend: virtual_core.Backend = .{
+    .ctx = null,
+    .resolveTableFn = kernelResolveTable,
+    .allocTableFn = kernelAllocTable,
+    .freeTableFn = kernelFreeTable,
+    .invlpgFn = kernelInvlpg,
 };
 
 pub fn getActivePml4() *PageTable {
@@ -46,104 +54,20 @@ pub fn mapPage(
     virt: u64,
     phys: u64,
     flags: u64,
-) error{ OutOfMemory, AlreadyMapped }!void {
-    const intermediate_flags = Flags.PRESENT | Flags.WRITABLE | (flags & Flags.USER);
-
-    // Level 4: PML4 -> PDPT
-    const pml4_i = pml4Index(virt);
-    if ((pml4.entries[pml4_i] & Flags.PRESENT) == 0) {
-        const new_table_phys = pmm.allocPage() orelse return error.OutOfMemory;
-        pml4.entries[pml4_i] = new_table_phys | intermediate_flags;
-    }
-    const pdpt_phys = pml4.entries[pml4_i] & Flags.PHYS_ADDR_MASK;
-    const pdpt: *PageTable = @ptrCast(@alignCast(pmm.physToVirt(pdpt_phys)));
-
-    // Level 3: PDPT -> PD
-    const pdpt_i = pdptIndex(virt);
-    if ((pdpt.entries[pdpt_i] & Flags.PRESENT) == 0) {
-        const new_table_phys = pmm.allocPage() orelse return error.OutOfMemory;
-        pdpt.entries[pdpt_i] = new_table_phys | intermediate_flags;
-    }
-    const pd_phys = pdpt.entries[pdpt_i] & Flags.PHYS_ADDR_MASK;
-    const pd: *PageTable = @ptrCast(@alignCast(pmm.physToVirt(pd_phys)));
-
-    // Level 2: PD -> PT
-    const pd_i = pdIndex(virt);
-    if ((pd.entries[pd_i] & Flags.PRESENT) == 0) {
-        const new_table_phys = pmm.allocPage() orelse return error.OutOfMemory;
-        pd.entries[pd_i] = new_table_phys | intermediate_flags;
-    }
-    const pt_phys = pd.entries[pd_i] & Flags.PHYS_ADDR_MASK;
-    const pt: *PageTable = @ptrCast(@alignCast(pmm.physToVirt(pt_phys)));
-
-    // Level 1: PT -> Physical frame
-    const pt_i = ptIndex(virt);
-    if ((pt.entries[pt_i] & Flags.PRESENT) != 0) {
-        return error.AlreadyMapped;
-    }
-
-    pt.entries[pt_i] = (phys & Flags.PHYS_ADDR_MASK) | flags | Flags.PRESENT;
-    cpu.invlpg(virt);
+) MapError!void {
+    return virtual_core.mapPage(kernel_backend, pml4, virt, phys, flags);
 }
 
-pub fn unmapPage(pml4: *PageTable, virt: u64) error{NotMapped}!void {
-    const pml4_i = pml4Index(virt);
-    if ((pml4.entries[pml4_i] & Flags.PRESENT) == 0) return error.NotMapped;
-    const pdpt_phys = pml4.entries[pml4_i] & Flags.PHYS_ADDR_MASK;
-    const pdpt: *PageTable = @ptrCast(@alignCast(pmm.physToVirt(pdpt_phys)));
-
-    const pdpt_i = pdptIndex(virt);
-    if ((pdpt.entries[pdpt_i] & Flags.PRESENT) == 0) return error.NotMapped;
-    const pd_phys = pdpt.entries[pdpt_i] & Flags.PHYS_ADDR_MASK;
-    const pd: *PageTable = @ptrCast(@alignCast(pmm.physToVirt(pd_phys)));
-
-    const pd_i = pdIndex(virt);
-    if ((pd.entries[pd_i] & Flags.PRESENT) == 0) return error.NotMapped;
-    const pt_phys = pd.entries[pd_i] & Flags.PHYS_ADDR_MASK;
-    const pt: *PageTable = @ptrCast(@alignCast(pmm.physToVirt(pt_phys)));
-
-    const pt_i = ptIndex(virt);
-    if ((pt.entries[pt_i] & Flags.PRESENT) == 0) return error.NotMapped;
-
-    pt.entries[pt_i] = 0;
-    cpu.invlpg(virt);
+pub fn unmapPage(pml4: *PageTable, virt: u64) UnmapError!void {
+    return virtual_core.unmapPage(kernel_backend, pml4, virt);
 }
 
 pub fn virtToPhys(pml4: *PageTable, virt: u64) ?u64 {
-    const pml4_i = pml4Index(virt);
-    if ((pml4.entries[pml4_i] & Flags.PRESENT) == 0) return null;
-    const pdpt_phys = pml4.entries[pml4_i] & Flags.PHYS_ADDR_MASK;
-    const pdpt: *PageTable = @ptrCast(@alignCast(pmm.physToVirt(pdpt_phys)));
-
-    const pdpt_i = pdptIndex(virt);
-    if ((pdpt.entries[pdpt_i] & Flags.PRESENT) == 0) return null;
-    if ((pdpt.entries[pdpt_i] & Flags.HUGE) != 0) {
-        // 1 GiB Huge Page
-        const base = pdpt.entries[pdpt_i] & 0x000F_FFFF_C000_0000;
-        return base + (virt & 0x3FFF_FFFF);
-    }
-    const pd_phys = pdpt.entries[pdpt_i] & Flags.PHYS_ADDR_MASK;
-    const pd: *PageTable = @ptrCast(@alignCast(pmm.physToVirt(pd_phys)));
-
-    const pd_i = pdIndex(virt);
-    if ((pd.entries[pd_i] & Flags.PRESENT) == 0) return null;
-    if ((pd.entries[pd_i] & Flags.HUGE) != 0) {
-        // 2 MiB Huge Page
-        const base = pd.entries[pd_i] & 0x000F_FFFF_FFE0_0000;
-        return base + (virt & 0x1F_FFFF);
-    }
-    const pt_phys = pd.entries[pd_i] & Flags.PHYS_ADDR_MASK;
-    const pt: *PageTable = @ptrCast(@alignCast(pmm.physToVirt(pt_phys)));
-
-    const pt_i = ptIndex(virt);
-    if ((pt.entries[pt_i] & Flags.PRESENT) == 0) return null;
-
-    const base = pt.entries[pt_i] & Flags.PHYS_ADDR_MASK;
-    return base + (virt & 0xFFF);
+    return virtual_core.virtToPhys(kernel_backend, pml4, virt);
 }
 
 pub fn isMapped(pml4: *PageTable, virt: u64) bool {
-    return virtToPhys(pml4, virt) != null;
+    return virtual_core.isMapped(kernel_backend, pml4, virt);
 }
 
 pub fn testVmm() bool {
@@ -151,18 +75,72 @@ pub fn testVmm() bool {
 
     // Choose an unmapped test virtual address in lower half
     const test_vaddr: u64 = 0x0000_0042_0000_0000;
+    const non_canonical_vaddr: u64 = 0x0001_0000_0000_0000;
 
     if (isMapped(pml4, test_vaddr)) return false;
+    if (isMapped(pml4, non_canonical_vaddr)) return false;
+    if (virtToPhys(pml4, non_canonical_vaddr) != null) return false;
+
+    if (unmapPage(pml4, non_canonical_vaddr)) |_| {
+        return false;
+    } else |err| {
+        if (err != error.NonCanonicalAddress) return false;
+    }
+
+    if (unmapPage(pml4, test_vaddr + 1)) |_| {
+        return false;
+    } else |err| {
+        if (err != error.UnalignedVirtualAddress) return false;
+    }
 
     // Allocate a physical frame via PMM
     const phys_frame = pmm.allocPage() orelse return false;
 
+    if (mapPage(pml4, non_canonical_vaddr, phys_frame, Flags.WRITABLE)) |_| {
+        pmm.freePage(phys_frame);
+        return false;
+    } else |err| {
+        if (err != error.NonCanonicalAddress) {
+            pmm.freePage(phys_frame);
+            return false;
+        }
+    }
+
+    if (mapPage(pml4, test_vaddr + 1, phys_frame, Flags.WRITABLE)) |_| {
+        pmm.freePage(phys_frame);
+        return false;
+    } else |err| {
+        if (err != error.UnalignedVirtualAddress) {
+            pmm.freePage(phys_frame);
+            return false;
+        }
+    }
+
+    if (mapPage(pml4, test_vaddr, phys_frame + 1, Flags.WRITABLE)) |_| {
+        pmm.freePage(phys_frame);
+        return false;
+    } else |err| {
+        if (err != error.UnalignedPhysicalAddress) {
+            pmm.freePage(phys_frame);
+            return false;
+        }
+    }
+
     // Map test_vaddr -> phys_frame
-    mapPage(pml4, test_vaddr, phys_frame, Flags.WRITABLE) catch return false;
+    mapPage(pml4, test_vaddr, phys_frame, Flags.WRITABLE) catch {
+        pmm.freePage(phys_frame);
+        return false;
+    };
 
     // Verify mapping
-    const resolved_phys = virtToPhys(pml4, test_vaddr) orelse return false;
-    if (resolved_phys != phys_frame) return false;
+    const resolved_phys = virtToPhys(pml4, test_vaddr) orelse {
+        pmm.freePage(phys_frame);
+        return false;
+    };
+    if (resolved_phys != phys_frame) {
+        pmm.freePage(phys_frame);
+        return false;
+    }
 
     // Write data through the newly mapped virtual address
     const test_ptr: *volatile u64 = @ptrFromInt(test_vaddr);
@@ -170,13 +148,22 @@ pub fn testVmm() bool {
 
     // Verify data reached physical frame via HHDM
     const hhdm_ptr: *volatile u64 = @ptrCast(@alignCast(pmm.physToVirt(phys_frame)));
-    if (hhdm_ptr.* != 0x12345678_ABCDEF01) return false;
+    if (hhdm_ptr.* != 0x12345678_ABCDEF01) {
+        pmm.freePage(phys_frame);
+        return false;
+    }
 
     // Unmap the page
-    unmapPage(pml4, test_vaddr) catch return false;
+    unmapPage(pml4, test_vaddr) catch {
+        pmm.freePage(phys_frame);
+        return false;
+    };
 
     // Verify unmapped
-    if (isMapped(pml4, test_vaddr)) return false;
+    if (isMapped(pml4, test_vaddr)) {
+        pmm.freePage(phys_frame);
+        return false;
+    }
 
     // Free frame back to PMM
     pmm.freePage(phys_frame);
