@@ -1,10 +1,11 @@
 # ZIG-OS — Verified Finding Register & Phase 1 Hardening Plan
 
-> **Document Authority:** Principal Kernel Auditor & Documentation Architect (Gemini 4 Argon)  
-> **Original Audit Baseline:** `c10c05f1f37aacfda5046480a314f29d940b67ef` (`main`)  
-> **Current Implementation Snapshot:** `c1ef192b336ba548ac0acb5340d92143bdad7994` (`main`)
-> **Audit Date:** 2026-11-11 (Updated: 2026-11-13)  
-> **Scope:** Independent source, build-pipeline, and ELF binary verification for Phase 1 hardening.
+> - **Document Authority:** Principal Kernel Auditor & Documentation Architect (Gemini 4 Argon)
+> - **v1.9 Documentation Operator:** Gemini 4 Hydrogen *(temporary documentation-only fallback while Gemini 4 Argon is out of quota; `F-06`/`F-11`/`F-12` dispositions reflected from independent source review by ChatGPT)*
+> - **Original Audit Baseline:** `c10c05f1f37aacfda5046480a314f29d940b67ef` (`main`)
+> - **Current Implementation Snapshot:** `0092cf37f8c26cbdcea1c1d5eba98676b2542667` (`main`)
+> - **Audit Date:** 2026-11-11 (Updated: 2026-11-13)
+> - **Scope:** Independent source, build-pipeline, and ELF binary verification for Phase 1 hardening.
 
 ---
 
@@ -22,6 +23,7 @@
 | **v1.6** | 2026-11-13 | Gemini 4 Argon | Independently audited `F-14` implementation at commit `771146810e41854f2b9e754f2a048f142ab633a8` and updated register: (1) inspected `build.zig`, `scripts/build.sh`, `scripts/package-iso.sh`, `scripts/lib/common.sh`, `scripts/lib/provenance.sh`, `scripts/lib/qemu-runner.sh`, `scripts/test-boot.sh`, `scripts/run.sh`, `scripts/debug.sh`, and `tests/test_boot.py` against all nine `F-14` resolution criteria; (2) marked `F-14` as `FIXED` while preserving a strict boundary between independently reviewed source/artifact evidence and implementation-agent-reported build, QEMU smoke-test, and `E.1`–`E.7` regression outputs, and recorded a non-blocking implementation note that `mv -f` from `${TMPDIR:-/tmp}` (`tmpfs`) to `build/zig-os.iso` (`ext4`) performs a cross-filesystem copy-and-unlink when `TMPDIR` is unset; (3) corrected Section 1.1 branch wording (`main` first-parent ancestor on `origin/main` rather than `origin/dev baseline`); (4) retained `F-10` as `VERIFIED` / `OPEN` / `P0` (`F-10B` pending); and (5) reconciled all status (`15 VERIFIED`, `1 LIKELY`, `2 FIXED`, `9 REJECTED`; `16` active findings), severity (`5 HIGH`, `6 MEDIUM`, `3 LOW`, `2 INFORMATIONAL`), and priority (`P0: 1`, `P1: 10`, `P2: 2`, `P3: 3`) tables. |
 | **v1.7** | 2026-11-13 | Gemini 4 Argon | Consolidated audit of `F-10B` Parts 1–3 (`bc2efdb0e673a6086f59e5ad0ca1669216f8c604`, `0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6`, `b3cf68bbfc659be339b24cf8b3110be7eb159b53`) and VMM hardening at HEAD `b3cf68bbfc659be339b24cf8b3110be7eb159b53`: (1) independently audited `physical_core.zig`, `physical.zig`, `virtual_core.zig`, `virtual.zig`, `heap_core.zig`, `heap.zig`, `heap_layout.zig`, `tests/pmm_test.zig`, `tests/vmm_test.zig`, `tests/heap_test.zig`, `tests/unit_test.zig`, and `build.zig`, verifying that all four host test targets (`unit_test` [7], `pmm_test` [10], `vmm_test` [10], `heap_test` [14] = 41 tests) import actual production modules with zero test-side algorithm duplication; (2) marked `F-10` as `FIXED` (`F-10A` + `F-10B` complete); (3) independently audited VMM hardening in `0156e91` and marked `F-09` (1 GiB `PDPTE` and 2 MiB `PDE` `Flags.HUGE` conflict rejection prior to child-table resolution or mutation) and `F-13` (48-bit canonical address validation, 4 KiB virtual/physical alignment checks, and parent `Flags.USER` propagation) as `FIXED`, while explicitly distinguishing Ring 0 QEMU runtime coverage (`vmm.testVmm()`) from host fake-backend coverage (`FakeVmmBackend` for huge-page conflicts and `Flags.USER` parent promotion); (4) verified that `F-06`, `F-11`, and `F-12` in `heap_core.zig` and `F-07`, `F-08`, `F-16`, and `F-17` in `physical_core.zig` remain `VERIFIED` (`OPEN`); and (5) reconciled all status (`12 VERIFIED`, `1 LIKELY`, `5 FIXED`, `9 REJECTED`; `13` active findings), severity (`0 CRITICAL`, `3 HIGH`, `5 MEDIUM`, `3 LOW`, `2 INFORMATIONAL`), and priority (`P0: 0`, `P1: 8`, `P2: 2`, `P3: 3`) tables. |
 | **v1.8** | 2026-11-13 | Gemini 4 Argon | Consolidated PMM hardening audit at HEAD `c1ef192b336ba548ac0acb5340d92143bdad7994` (`fix(mm): harden PMM memory-map and free validation (F-07 F-08 F-16)`): (1) independently audited `kernel/src/mm/physical_core.zig`, `kernel/src/mm/physical.zig`, and `tests/pmm_test.zig` (16 stateful PMM tests; `47/47` total host unit tests across `unit_test` [7], `pmm_test` [16], `vmm_test` [10], and `heap_test` [14]); (2) marked `F-07` (`RegionKind.contributesToHighestAddress()` RAM-backed ceiling calculation, explicit `mapLimineRegionKind()` mapping, and checked arithmetic excluding high MMIO/framebuffer/reserved apertures), `F-08` (6-step `validateFreePage()` enforcing `< 1 MiB` `ReservedAddress`, page-rounded `BitmapOverlap`, and `.usable` `NotUsableRegion`, two-pass atomic `freePages()`, exhaustive `panicOnFreeError()`, value-stored `RegionSource` union, and module-static `limine_region_ctx`), and `F-16` (`>= 1 MiB` page-aligned bitmap placement, page-rounded backing fit, non-usable overlap rejection, and full `[bitmap_phys, bitmap_end_phys)` frame reservation) as `FIXED` (concurring with independent review by ChatGPT); (3) maintained strict provenance separation between independent source audit, agent-reported 4-mode host tests (`47/47`), 4-mode kernel builds, `F-01` disassembly (`0` matches), `Debug`/`ReleaseSafe` QEMU smoke tests, and host-only synthetic memory-map cases (64 TiB MMIO exclusion and `freePages()` failure-atomicity); (4) preserved `F-03`, `F-04`, `F-06`, `F-11`, `F-12`, `F-15`, `F-17`, `F-18`, `F-19`, and `F-20` as `OPEN`; and (5) reconciled all status (`9 VERIFIED`, `1 LIKELY`, `8 FIXED`, `9 REJECTED`; `10` active findings), severity (`0 CRITICAL`, `1 HIGH`, `5 MEDIUM`, `2 LOW`, `2 INFORMATIONAL`), and priority (`P0: 0`, `P1: 6`, `P2: 1`, `P3: 3`) tables. |
+| **v1.9** | 2026-11-13 | Gemini 4 Hydrogen *(Documentation Operator fallback)* | Updated register at HEAD `0092cf37f8c26cbdcea1c1d5eba98676b2542667` (`fix(heap): restore zero-alignment compatibility and check split bounds (F-11 F-12)`, following `18dabd7c3f62345b4970f8a4baf3016197471e11`) acting in temporary documentation-only fallback capacity while Gemini 4 Argon is unavailable (permanent Document Authority remains Gemini 4 Argon): (1) recorded independent source/diff review dispositions by ChatGPT marking `F-06`, `F-11`, and `F-12` as `FIXED` across `kernel/src/mm/heap_layout.zig`, `kernel/src/mm/heap_core.zig`, `kernel/src/mm/heap.zig`, and `tests/heap_test.zig` (specifically preserving `alignment == 0` -> 16-byte default compatibility restored at `0092cf3`); (2) preserved strict provenance separation between ChatGPT's independent source/diff review and implementation-agent-reported execution results (`54/54` uncached host tests across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`: `unit_test` [7], `pmm_test` [16], `vmm_test` [10], `heap_test` [21]; 4-mode kernel builds; `F-01` disassembly `0` matches; `Debug` and `ReleaseSafe` QEMU smoke tests with 3-way provenance); (3) preserved Phase 1 (`Pending Human Review`) and Phase 2 (`NOT AUTHORIZED`) gates unchanged; and (4) reconciled all status (`6 VERIFIED`, `1 LIKELY`, `0 NEEDS_RUNTIME_VERIFICATION`, `9 REJECTED`, `11 FIXED`; `7` active findings), severity (`0 CRITICAL`, `0 HIGH`, `3 MEDIUM` [`F-03`, `F-04`, `F-15`], `2 LOW` [`F-18`, `F-19`], `2 INFORMATIONAL` [`F-17`, `F-20`]), and priority (`P0: 0`, `P1: 3` [`F-03`, `F-04`, `F-15`], `P2: 1` [`F-19`], `P3: 3` [`F-17`, `F-18`, `F-20`]) tables. |
 
 ---
 
@@ -29,37 +31,45 @@
 
 ### 1.1 Git Snapshot Identity
 
-| Attribute | Original Audit Baseline (`v1.0`–`v1.3.1`) | Current Implementation Snapshot (`v1.8`) | Match Status |
+| Attribute | Original Audit Baseline (`v1.0`–`v1.3.1`) | Current Implementation Snapshot (`v1.9`) | Match Status |
 |---|---|---|---|
 | **Repository** | `leevawn131/zig-os` | `leevawn131/zig-os` | **MATCH** |
 | **Branch** | `main` (`origin/main` first-parent ancestor; `origin/dev` ref also points to `c10c05f1`) | `main` (`origin/main`) | **MATCH** |
-| **HEAD Commit SHA** | `c10c05f1f37aacfda5046480a314f29d940b67ef` | `c1ef192b336ba548ac0acb5340d92143bdad7994` | **EXACT MATCH** |
-| **Commit Subject** | `feat(kernel): implement Phase 1 core kernel infrastructure` | `fix(mm): harden PMM memory-map and free validation (F-07 F-08 F-16)` | **EXACT MATCH** |
-| **Commit Timestamp** | `2026-11-10T14:10:11+07:00` | `2026-11-13T08:46:29+07:00` | **EXACT MATCH** |
-| **Intervening Source Commits** | — | `515aa91becaf772f3f5b9243f92c1c0828f5d0bc` (`F-01` fix), `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` pure modules), `771146810e41854f2b9e754f2a048f142ab633a8` (`F-14` fix), `bc2efdb0e673a6086f59e5ad0ca1669216f8c604` (`F-10B` Part 1 PMM), `0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6` (`F-10B` Part 2 VMM + `F-09`/`F-13`), `b3cf68bbfc659be339b24cf8b3110be7eb159b53` (`F-10B` Part 3 Heap), `c1ef192b336ba548ac0acb5340d92143bdad7994` (`F-07`/`F-08`/`F-16` PMM hardening) | **VERIFIED** |
+| **HEAD Commit SHA** | `c10c05f1f37aacfda5046480a314f29d940b67ef` | `0092cf37f8c26cbdcea1c1d5eba98676b2542667` | **EXACT MATCH** |
+| **Commit Subject** | `feat(kernel): implement Phase 1 core kernel infrastructure` | `fix(heap): restore zero-alignment compatibility and check split bounds (F-11 F-12)` | **EXACT MATCH** |
+| **Commit Timestamp** | `2026-11-10T14:10:11+07:00` | `2026-11-13T13:12:11+07:00` | **EXACT MATCH** |
+| **Intervening Source Commits** | — | `515aa91becaf772f3f5b9243f92c1c0828f5d0bc` (`F-01` fix), `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` pure modules), `771146810e41854f2b9e754f2a048f142ab633a8` (`F-14` fix), `bc2efdb0e673a6086f59e5ad0ca1669216f8c604` (`F-10B` Part 1 PMM), `0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6` (`F-10B` Part 2 VMM + `F-09`/`F-13`), `b3cf68bbfc659be339b24cf8b3110be7eb159b53` (`F-10B` Part 3 Heap), `c1ef192b336ba548ac0acb5340d92143bdad7994` (`F-07`/`F-08`/`F-16` PMM hardening), `18dabd7c3f62345b4970f8a4baf3016197471e11` (`F-06`/`F-11`/`F-12` heap hardening), `0092cf37f8c26cbdcea1c1d5eba98676b2542667` (`align=0` compatibility & checked split/bounds hardening) | **VERIFIED** |
 
 ### 1.2 Working Tree & Build Artifact Status (`git status --short`)
 
-At current snapshot `c1ef192b336ba548ac0acb5340d92143bdad7994`:
+At current snapshot `0092cf37f8c26cbdcea1c1d5eba98676b2542667`:
 ```text
  M zig.zip
 ?? docs/md.zip
 ?? graphify-out/
 ```
 
-- **Kernel, Linker, Build, and Test Source Integrity (`c1ef192`):** Zero tracked source files under [`kernel/`](file:///home/leevawn/Projects/zig-os/kernel), [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/`](file:///home/leevawn/Projects/zig-os/scripts), or [`tests/`](file:///home/leevawn/Projects/zig-os/tests) have uncommitted modifications. All tracked code, build definitions, scripts, and tests match commit `c1ef192b336ba548ac0acb5340d92143bdad7994` byte-for-byte (`c1ef192` modified only `kernel/src/mm/physical_core.zig`, `kernel/src/mm/physical.zig`, and `tests/pmm_test.zig`).
+- **Kernel, Linker, Build, and Test Source Integrity (`0092cf3`):** Zero tracked source files under [`kernel/`](file:///home/leevawn/Projects/zig-os/kernel), [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/`](file:///home/leevawn/Projects/zig-os/scripts), or [`tests/`](file:///home/leevawn/Projects/zig-os/tests) have uncommitted modifications outside this documentation-only register update. All tracked code, build definitions, scripts, and tests match commit `0092cf37f8c26cbdcea1c1d5eba98676b2542667` byte-for-byte (`18dabd7` modified `kernel/src/mm/heap_layout.zig`, `kernel/src/mm/heap_core.zig`, `kernel/src/mm/heap.zig`, and `tests/heap_test.zig`; `0092cf3` modified `kernel/src/mm/heap_core.zig`, `kernel/src/mm/heap.zig`, and `tests/heap_test.zig`).
 - **Untouched Working-Tree Artifacts:** `zig.zip`, `docs/md.zip`, and `graphify-out/` remain untouched in the local workspace per governance safety rules (causing `git status --porcelain` in `scripts/lib/common.sh` to report `tree=dirty` during local builds).
-- **On-Disk Build Artifacts at `c1ef192` (Independently Inspected via `sha256sum`; `ReleaseSafe` Kernel ELF/ISO from Final `python3 tests/test_boot.py --optimize ReleaseSafe` Run):**
+- **On-Disk Build Artifacts at `0092cf3` (Verified via `sha256sum`; `ReleaseSafe` Kernel ELF/ISO from Final `python3 tests/test_boot.py --optimize ReleaseSafe` Run on Final Source Prior to Commit):**
   ```text
-  8a3184185b09f97970764cbd722eed42e8e21aafb9292434adee39d8e8ab064f  zig-out/bin/kernel.elf
-  8a3184185b09f97970764cbd722eed42e8e21aafb9292434adee39d8e8ab064f  build/iso_root/boot/kernel.elf
-  a5b1a9ccc0fb0fdf964bbf6d8a70be07a7d8b47b06786c7538138d1e65bd1948  build/zig-os.iso
+  4db2911990d19ca63045aa3dcdab13ac93b272a3c2b9210d8dd59365e1ecec0c  zig-out/bin/kernel.elf
+  4db2911990d19ca63045aa3dcdab13ac93b272a3c2b9210d8dd59365e1ecec0c  build/iso_root/boot/kernel.elf
+  f283df7385fbd1ac5ffbc303414d4fcfa4d6871f62b99a92e7a49d49f5c26c34  build/zig-os.iso
   ```
-- **Agent-Reported `Debug` Build Artifacts at `c1ef192` (`bash scripts/test-boot.sh --optimize Debug`):**
+- **Implementation-Agent-Reported `Debug` Build Artifacts at `0092cf3` (`bash scripts/test-boot.sh --optimize Debug` on Final Source Prior to Commit):**
   ```text
-  539f0998886c12b990e9af57b10862fe9f6f811ee2e0f93667ebf44bba45de09  zig-out/bin/kernel.elf (Debug)
-  539f0998886c12b990e9af57b10862fe9f6f811ee2e0f93667ebf44bba45de09  build/iso_root/boot/kernel.elf (Debug)
-  09f882ef9a6ceee505cb9b977fa55664b623aa615fcc24bcd9abde0840c4d2f7  build/zig-os.iso (Debug)
+  76f798ca76424630ad7f7938e7ab68d249f7ef7aa4456339e1bd9c6c63ba2732  zig-out/bin/kernel.elf (Debug)
+  76f798ca76424630ad7f7938e7ab68d249f7ef7aa4456339e1bd9c6c63ba2732  build/iso_root/boot/kernel.elf (Debug)
+  23a568024f7526bea6f3d050eb05f887c732b7da9981f0cab5c5e009004b0102  build/zig-os.iso (Debug)
+  ```
+- **Historical Build Artifacts Inspected at `c1ef192` (`v1.8`, PMM Hardening):**
+  ```text
+  8a3184185b09f97970764cbd722eed42e8e21aafb9292434adee39d8e8ab064f  zig-out/bin/kernel.elf (ReleaseSafe)
+  8a3184185b09f97970764cbd722eed42e8e21aafb9292434adee39d8e8ab064f  build/iso_root/boot/kernel.elf (ReleaseSafe)
+  a5b1a9ccc0fb0fdf964bbf6d8a70be07a7d8b47b06786c7538138d1e65bd1948  build/zig-os.iso (ReleaseSafe)
+  539f0998886c12b990e9af57b10862fe9f6f811ee2e0f93667ebf44bba45de09  zig-out/bin/kernel.elf (Debug, agent-reported)
+  09f882ef9a6ceee505cb9b977fa55664b623aa615fcc24bcd9abde0840c4d2f7  build/zig-os.iso (Debug, agent-reported)
   ```
 - **Historical Build Artifacts Inspected at `b3cf68b` (`v1.7`, `F-10B` Part 3):**
   ```text
@@ -97,10 +107,10 @@ Every claim in this register is classified strictly by the verification method a
 
 | Verification Tier | Executed / Provenance | Command / Method | Empirical Result & Provenance |
 |---|---|---|---|
-| **Static Source Inspection (`c10c05f` through `c1ef192`)** | **YES (Independently Audited by Argon & Reviewed by ChatGPT)** | Direct line-by-line review of all files in `kernel/`, `build.zig`, `scripts/`, `tests/`, `docs/`, and `/opt/zig/current/lib/std/Target/x86.zig` | Completed across 100% of kernel and build sources at baseline `c10c05f1`, re-verified at `9df21f8b` (`F-10A`), `77114681` (`F-14`), `bc2efdb0`/`0156e910`/`b3cf68bb` (`F-10B` Parts 1–3 + `F-09`/`F-13`), and independently audited at `c1ef192b336ba548ac0acb5340d92143bdad7994` across `kernel/src/mm/physical_core.zig`, `kernel/src/mm/physical.zig`, and `tests/pmm_test.zig` (`F-07`, `F-08`, `F-16`, plus `RegionSource` and `limine_region_ctx` lifetime safety). Independent technical review by ChatGPT also reported PASS for `F-07`/`F-08`/`F-16`. |
-| **ELF & ISO Binary Inspection (`c10c05f`, `515aa91`, `7711468`, `b3cf68b`, & `c1ef192`)** | **YES (Baseline & On-Disk Hashes Audited / `F-01` Disassembly Agent-Reported)** | `sha256sum`, `xorriso -extract`, `readelf -h -l -S -d`, `nm -n`, `objdump -d -M intel`, `df -T` | At `c10c05f`, confirmed `/boot/kernel.elf` inside `build/zig-os.iso` matched `zig-out/bin/kernel.elf` (`19e69d10...`), 3 `PT_LOAD` segments (`R E`, `R`, `RW`), orphan `.got` section, Limine request ordering, and 6,904 `xmm` / 2,274 `movaps` instructions. At `515aa91` (`F-01`), `b3cf68b` (`F-10B` Part 3), and `c1ef192` (`F-07`/`F-08`/`F-16` across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`), implementation agents reported `0` prohibited SIMD/x87 instructions in `kernel.elf`. At `c1ef192`, auditor verified on-disk `zig-out/bin/kernel.elf` and `build/iso_root/boot/kernel.elf` SHA-256 (`8a3184185b09f97970764cbd722eed42e8e21aafb9292434adee39d8e8ab064f`) and `build/zig-os.iso` SHA-256 (`a5b1a9ccc0fb0fdf964bbf6d8a70be07a7d8b47b06786c7538138d1e65bd1948`). |
-| **Host Unit Tests (`c10c05f` vs. `b3cf68b` & `c1ef192`)** | **Baseline Audited / `c1ef192` Source Audited & Execution Agent-Reported** | `zig build test -Doptimize=<mode> --cache-dir <tmp> --summary all` across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall` | At `c10c05f`, `5/5` tests passed against local duplicate functions in `tests/unit_test.zig`. At `c1ef192`, independent source review confirms `zig build test` wires four host test targets importing production modules with zero duplicate algorithms: `unit_test` (`tests/unit_test.zig`, 7 pure tests), `pmm_test` (`tests/pmm_test.zig` importing `physical_core.zig`, 16 stateful PMM tests including 6 `F-07`/`F-08`/`F-16`/lifetime regression tests), `vmm_test` (`tests/vmm_test.zig` importing `virtual_core.zig`, 10 stateful VMM tests including `F-09` and `F-13`), and `heap_test` (`tests/heap_test.zig` importing `heap_core.zig`, 14 stateful Heap tests). Implementation agent (Hydrogen) reported `47/47` host tests passing uncached across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`. |
-| **Build, Provenance, & QEMU Boot Verification (`c10c05f` vs. `7711468`, `b3cf68b`, & `c1ef192`)** | **Baseline Audited / `c1ef192` Source Audited & Execution Agent-Reported** | `zig build -Doptimize=<mode>`, `bash scripts/test-boot.sh --optimize Debug`, `python3 tests/test_boot.py --optimize ReleaseSafe` | At `c1ef192`, implementation agent (Hydrogen) reported clean kernel compilation across all 4 optimization modes (`Debug`, `ReleaseSafe`, `ReleaseFast`, `ReleaseSmall`), passing `Debug` (`539f0998...`) and `ReleaseSafe` (`8a318418...`) ISO builds with 3-way SHA-256 provenance verification, and passing QEMU headless smoke tests to `zig-os:~$`. **Provenance & Environment Boundary:** In-kernel QEMU boot tests (`pmm.testPmm()`, `vmm.testVmm()`, `heap.testHeap()`) exercise live Limine Ring 0 `bitmap_phys >= 0x100000` placement, `core.freePage(0x0)` (`ReservedAddress`), `core.freePage(bitmap_phys)` / `core.freePage(bitmap_end_phys - PAGE_SIZE)` (`BitmapOverlap`), tracked non-usable Limine frame `>= 1 MiB` (`NotUsableRegion`), 4 KiB page mapping/unmapping, canonical/alignment rejection, frame allocation, and heap allocation; however, synthetic 64 TiB `.reserved` MMIO ceiling exclusion (`F-07`), `freePages()` failure-atomicity across synthetic boundary spans (`F-08`), multi-candidate `< 1 MiB`/multi-page bitmap fallback matrices (`F-16`), 1 GiB/2 MiB huge-page conflict protection (`F-09`), and `Flags.USER` parent-entry promotion (`F-13`) are verified via host-side unit tests (`tests/pmm_test.zig` and `tests/vmm_test.zig`), not under QEMU. |
+| **Static Source Inspection (`c10c05f` through `0092cf3`)** | **YES (`c10c05f`–`c1ef192` Audited by Argon; `18dabd7`–`0092cf3` Independently Reviewed by ChatGPT)** | Direct line-by-line review of source files and diffs across `kernel/`, `build.zig`, `scripts/`, `tests/`, `docs/`, and `/opt/zig/current/lib/std/Target/x86.zig` | Baseline through `c1ef192b` independently audited by Gemini 4 Argon. At `0092cf37f8c26cbdcea1c1d5eba98676b2542667` (following `18dabd7c3f62345b4970f8a4baf3016197471e11`), independent technical reviewer **ChatGPT** reviewed the complete source and diffs across `kernel/src/mm/heap_layout.zig`, `kernel/src/mm/heap_core.zig`, `kernel/src/mm/heap.zig`, and `tests/heap_test.zig`, issuing `FIXED` source dispositions for `F-06`, `F-11`, and `F-12` (including `alignment == 0` -> 16-byte compatibility and checked split bounds). Gemini 4 Argon did not perform this v1.9 pass due to quota exhaustion, and ChatGPT's review covers static source/diff inspection only (not execution of tests, builds, or QEMU). |
+| **ELF & ISO Binary Inspection (`c10c05f`, `515aa91`, `7711468`, `b3cf68b`, `c1ef192`, & `0092cf3`)** | **On-Disk Hashes Verified / `F-01` Disassembly Agent-Reported** | `sha256sum`, `xorriso -extract`, `readelf -h -l -S -d`, `nm -n`, `objdump -d -M intel`, `df -T` | At `c10c05f`, confirmed `/boot/kernel.elf` inside `build/zig-os.iso` matched `zig-out/bin/kernel.elf` (`19e69d10...`), 3 `PT_LOAD` segments (`R E`, `R`, `RW`), orphan `.got` section, Limine request ordering, and 6,904 `xmm` / 2,274 `movaps` instructions. At `515aa91`, `b3cf68b`, `c1ef192`, and `0092cf3` (across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`), the implementation agent (Hydrogen) reported `0` prohibited SIMD/x87 matches in `zig-out/bin/kernel.elf` via `objdump -d -M intel`. On-disk `0092cf3` `ReleaseSafe` SHA-256 hashes verified cleanly via `sha256sum`: `zig-out/bin/kernel.elf` and `build/iso_root/boot/kernel.elf` (`4db2911990d19ca63045aa3dcdab13ac93b272a3c2b9210d8dd59365e1ecec0c`), and `build/zig-os.iso` (`f283df7385fbd1ac5ffbc303414d4fcfa4d6871f62b99a92e7a49d49f5c26c34`). |
+| **Host Unit Tests (`c10c05f` vs. `b3cf68b`, `c1ef192`, & `0092cf3`)** | **Test Graph Verified (`build.zig`) / Execution Implementation-Agent-Reported (Not Independently Run by ChatGPT or Argon)** | `zig build test -Doptimize=<mode> --cache-dir <tmp> --summary all` across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall` | At `c10c05f`, `5/5` tests passed against local duplicate functions in `tests/unit_test.zig`. Through `0092cf3`, `zig build test` wires four host test targets importing production modules with zero duplicate algorithms: `unit_test` (`tests/unit_test.zig`, 7 pure tests), `pmm_test` (`tests/pmm_test.zig` importing `physical_core.zig`, 16 stateful PMM tests), `vmm_test` (`tests/vmm_test.zig` importing `virtual_core.zig`, 10 stateful VMM tests), and `heap_test` (`tests/heap_test.zig` importing `heap_core.zig`, **21** stateful Heap tests: `Heap 01`–`Heap 21` covering `F-06`, `F-11`, and `F-12`). Implementation agent (Hydrogen) reported **54/54** uncached host unit tests passing across all four optimization modes (`Debug`, `ReleaseSafe`, `ReleaseFast`, `ReleaseSmall`). **Environment note:** Host `heap_test` runs against page-aligned host buffers in `FakeHeapBackend`, not live Ring 0 paging. |
+| **Build, Provenance, & QEMU Boot Verification (`c10c05f` vs. `7711468`, `c1ef192`, & `0092cf3`)** | **Implementation-Agent-Reported (Not Independently Run by ChatGPT or Argon)** | `zig build -Doptimize=<mode>`, `bash scripts/test-boot.sh --optimize Debug`, `python3 tests/test_boot.py --optimize ReleaseSafe` | At `0092cf3`, implementation agent (Hydrogen) reported clean freestanding `kernel.elf` compilation across all 4 optimization modes (`Debug`, `ReleaseSafe`, `ReleaseFast`, `ReleaseSmall`), passing `Debug` (`76f798ca...`) and `ReleaseSafe` (`4db29119...`) ISO builds with 3-way kernel ELF SHA-256 provenance matching, and passing headless QEMU boot smoke tests through `zig-os:~$`. **Provenance & Environment Boundary:** In-kernel QEMU boot tests (`pmm.testPmm()`, `vmm.testVmm()`, `heap.testHeap()`) execute under Ring 0 (`heap.testHeap()` checks `b2 - 8`, `b2 + 1`, `b2 + 128` returning `error.BlockHeaderNotFound`, `allocate(64, 0)` 16-byte default compatibility, and `maxInt(usize)`/`3`/`24`/`HEAP_MAX_SIZE * 2` non-mutation); however, unsplit tail-slack free rejection (`Heap 15` Part B), the exact `init(4) -> 16320@16 -> 16336@64` 9-page expansion (`Heap 20`), remaining-headroom clamping and partial-expansion / partial-init recovery (`Heap 17`–`Heap 18`), corrupted-metadata split/bounds rejection (`Heap 21`), 64 TiB `.reserved` MMIO ceiling exclusion (`F-07`), `freePages()` failure-atomicity (`F-08`), multi-candidate bitmap placement (`F-16`), 1 GiB/2 MiB huge-page conflicts (`F-09`), and `Flags.USER` parent-entry promotion (`F-13`) are covered by host fake-backend unit tests only, not under QEMU. |
 
 ---
 
@@ -110,28 +120,28 @@ Every claim in this register is classified strictly by the verification method a
 
 | Status Category | Count | Finding IDs |
 |---|---:|---|
-| **VERIFIED** | **9** | `F-03`, `F-04`, `F-06`, `F-11`, `F-12`, `F-15`, `F-17`, `F-18`, `F-20` |
+| **VERIFIED** | **6** | `F-03`, `F-04`, `F-15`, `F-17`, `F-18`, `F-20` |
 | **LIKELY** | **1** | `F-19` |
 | **NEEDS_RUNTIME_VERIFICATION** | **0** | None |
 | **REJECTED** | **9** | `R-01`, `R-02`, `R-03`, `R-04`, `R-05`, `R-06`, `R-07`, `R-08` (formerly `F-05`), `R-09` (formerly `F-02`) |
-| **FIXED** | **8** | `F-01` (at `515aa91`: `cpu_features_sub`/`cpu_features_add` in `build.zig`), `F-07` (at `c1ef192`: RAM-backed `RegionKind.contributesToHighestAddress()` ceiling calculation in `physical_core.zig`), `F-08` (at `c1ef192`: `< 1 MiB`, page-rounded bitmap, and `.usable` validation in `freePage()`/atomic `freePages()`, value-stored `RegionSource`, and static `limine_region_ctx`), `F-09` (at `0156e91`: 1 GiB/2 MiB `Flags.HUGE` conflict checks in `virtual_core.zig`), `F-10` (across `9df21f8`, `bc2efdb`, `0156e91`, `b3cf68b`: `F-10A` pure modules + `F-10B` stateful PMM, VMM, and Heap cores wired into `zig build test`), `F-13` (at `0156e91`: 48-bit canonicality, 4 KiB alignment, and parent `Flags.USER` propagation in `virtual_core.zig`), `F-14` (at `7711468`: unconditional fresh build, non-recursive graph, `ReleaseSafe` default, and 3-way ELF SHA-256 provenance verification), `F-16` (at `c1ef192`: `>= 1 MiB` page-aligned bitmap placement, page-rounded fit, and full backing-page reservation in `physical_core.zig`) |
+| **FIXED** | **11** | `F-01` (at `515aa91`: `cpu_features_sub`/`cpu_features_add` in `build.zig`), `F-06` (at `18dabd7`/`0092cf3`: `BlockHeader.align_offset` exact-pointer check in `heap_layout.zig`/`heap_core.zig`), `F-07` (at `c1ef192`: RAM-backed `RegionKind.contributesToHighestAddress()` ceiling calculation in `physical_core.zig`), `F-08` (at `c1ef192`: `< 1 MiB`, page-rounded bitmap, and `.usable` validation in `freePage()`/atomic `freePages()`, value-stored `RegionSource`, and static `limine_region_ctx`), `F-09` (at `0156e91`: 1 GiB/2 MiB `Flags.HUGE` conflict checks in `virtual_core.zig`), `F-10` (across `9df21f8`, `bc2efdb`, `0156e91`, `b3cf68b`: `F-10A` pure modules + `F-10B` stateful PMM, VMM, and Heap cores wired into `zig build test`), `F-11` (at `18dabd7`/`0092cf3`: alignment-aware expansion sizing, coalesced free-tail deficit calculation, batch clamping, partial-expansion retry, and checked `init()`/`tryInit()`), `F-12` (at `18dabd7`/`0092cf3`: checked size/split/range/deallocate arithmetic, nonzero non-power-of-two rejection, `align=0` -> 16-byte default compatibility, and corrupted-metadata guards), `F-13` (at `0156e91`: 48-bit canonicality, 4 KiB alignment, and parent `Flags.USER` propagation in `virtual_core.zig`), `F-14` (at `7711468`: unconditional fresh build, non-recursive graph, `ReleaseSafe` default, and 3-way ELF SHA-256 provenance verification), `F-16` (at `c1ef192`: `>= 1 MiB` page-aligned bitmap placement, page-rounded fit, and full backing-page reservation in `physical_core.zig`) |
 
-### 3.2 Severity Distribution (Active Findings: 10 Total)
+### 3.2 Severity Distribution (Active Findings: 7 Total)
 
 | Severity | Count | Finding IDs |
 |---|---:|---|
 | **CRITICAL** | **0** | None |
-| **HIGH** | **1** | `F-06` |
-| **MEDIUM** | **5** | `F-03`, `F-04`, `F-11`, `F-12`, `F-15` |
+| **HIGH** | **0** | None |
+| **MEDIUM** | **3** | `F-03`, `F-04`, `F-15` |
 | **LOW** | **2** | `F-18`, `F-19` |
 | **INFORMATIONAL** | **2** | `F-17`, `F-20` |
 
-### 3.3 Priority Distribution (`P0`–`P3`: 10 Active Findings)
+### 3.3 Priority Distribution (`P0`–`P3`: 7 Active Findings)
 
 | Priority | Count | Finding IDs |
 |---|---:|---|
 | **P0 — Must fix before further kernel development** | **0** | None (`F-01`, `F-10`, and `F-14` are `FIXED`) |
-| **P1 — Must fix before Phase 2 authorization** | **6** | `F-03`, `F-04`, `F-06`, `F-11`, `F-12`, `F-15` (`F-07`, `F-08`, `F-09`, and `F-13` are `FIXED`) |
+| **P1 — Must fix before Phase 2 authorization** | **3** | `F-03`, `F-04`, `F-15` (`F-06`, `F-07`, `F-08`, `F-09`, `F-11`, `F-12`, and `F-13` are `FIXED`) |
 | **P2 — Important hardening that can follow** | **1** | `F-19` (`F-16` is `FIXED`) |
 | **P3 — Future improvements** | **3** | `F-17`, `F-18`, `F-20` |
 
@@ -139,7 +149,7 @@ Every claim in this register is classified strictly by the verification method a
 
 ## 4. Finding Register (`F-01`–`F-20`)
 
-> **Source Version Note:** Findings were originally audited at baseline commit `c10c05f1f37aacfda5046480a314f29d940b67ef` (`2026-11-10`) and updated through current implementation snapshot `c1ef192b336ba548ac0acb5340d92143bdad7994` (`2026-11-13`, incorporating `515aa91` for `F-01`, `9df21f8` for `F-10A`, `7711468` for `F-14`, `bc2efdb` for `F-10B` Part 1 PMM, `0156e91` for `F-10B` Part 2 VMM + `F-09`/`F-13`, `b3cf68b` for `F-10B` Part 3 Heap, and `c1ef192` for PMM hardening `F-07`/`F-08`/`F-16`). Historical IDs `F-02` and `F-05` are retained in place with `Status: REJECTED` and cross-referenced to `R-09` and `R-08` in Section 5 to preserve full audit traceability.
+> **Source Version Note:** Findings were originally audited at baseline commit `c10c05f1f37aacfda5046480a314f29d940b67ef` (`2026-11-10`) and updated through current implementation snapshot `0092cf37f8c26cbdcea1c1d5eba98676b2542667` (`2026-11-13`, incorporating `515aa91` for `F-01`, `9df21f8` for `F-10A`, `7711468` for `F-14`, `bc2efdb` for `F-10B` Part 1 PMM, `0156e91` for `F-10B` Part 2 VMM + `F-09`/`F-13`, `b3cf68b` for `F-10B` Part 3 Heap, `c1ef192` for PMM hardening `F-07`/`F-08`/`F-16`, `18dabd7` for heap hardening `F-06`/`F-11`/`F-12`, and `0092cf3` for `align=0` compatibility & checked split/bounds hardening). Historical IDs `F-02` and `F-05` are retained in place with `Status: REJECTED` and cross-referenced to `R-09` and `R-08` in Section 5 to preserve full audit traceability.
 
 ---
 
@@ -382,68 +392,35 @@ Per **Intel SDM Vol. 3A, Section 6.14.2 ("64-Bit Mode Stack Frame")** and **AMD6
 
 ### [F-06] Heap `deallocate()` accepts interior pointers, alignment-padding pointers, and tail-slack pointers
 
-**Status:** VERIFIED
+**Status:** FIXED (Independently Source-Reviewed at `0092cf37f8c26cbdcea1c1d5eba98676b2542667` by ChatGPT following `18dabd7c3f62345b4970f8a4baf3016197471e11`; Host Production-Core Regression Test `Heap 15` Across All 4 Optimization Modes Implementation-Agent-Reported Passing; Live Ring 0 `heap.testHeap()` Exercises `b2 - 8`, `b2 + 1`, and `b2 + 128` under QEMU, While Unsplit Tail-Slack Rejection Is Verified in Host Unit Tests Only)
 
-**Severity:** HIGH
+**Severity:** HIGH (Resolved)
 
 **Confidence:** HIGH
 
 **Affected component:**  
-Kernel heap allocator core ([`kernel/src/mm/heap_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig)), block header layout ([`kernel/src/mm/heap_layout.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig)), and kernel heap adapter ([`kernel/src/mm/heap.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig)).
+Kernel heap allocator core ([`kernel/src/mm/heap_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig)), block header layout ([`kernel/src/mm/heap_layout.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig)), kernel heap adapter ([`kernel/src/mm/heap.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig)), and heap host test suite ([`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig)).
 
 **Source location:**  
-- [`kernel/src/mm/heap_core.zig:140-178`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L140-L178) and [`kernel/src/mm/heap_core.zig:189-208`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L189-L208)
-- [`kernel/src/mm/heap_layout.zig:4-14`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig#L4-L14)
-- [`kernel/src/mm/heap.zig:50-64`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L50-L64)
+- [`kernel/src/mm/heap_layout.zig:4-22`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig#L4-L22)
+- [`kernel/src/mm/heap_core.zig:54-72, 210-341, 386-445`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L386-L445)
+- [`kernel/src/mm/heap.zig:12-15, 69-77, 177-190`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L177-L190)
+- [`tests/heap_test.zig:126-174, 639-715`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L639-L715)
 
-**Evidence:**  
-In [`HeapAllocator.allocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L143-L175) (extracted verbatim from `heap.zig` in `b3cf68b`):
-```zig
-const payload_addr = @intFromPtr(block) + HEADER_SIZE;
-const aligned_payload = (payload_addr + align_val - 1) & ~(align_val - 1);
-const align_offset = aligned_payload - payload_addr;
-const total_needed = aligned_size + align_offset;
-...
-return @ptrFromInt(aligned_payload);
-```
-In [`HeapAllocator.deallocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L198-L206):
-```zig
-while (curr) |block| {
-    const payload_start = @intFromPtr(block) + HEADER_SIZE;
-    const payload_end = payload_start + block.size;
-    if (raw_addr >= payload_start and raw_addr < payload_end) {
-        found_block = block;
-        break;
-    }
-    curr = block.next;
-}
-```
+**Resolution & Review Evaluation (v1.9, Commits `18dabd7c` & `0092cf37f8c26cbdcea1c1d5eba98676b2542667`):**
+1. **Independent Source & Diff Disposition (Reviewed by ChatGPT at `0092cf3`):**
+   - **Fixed-Layout `align_offset` Field (`heap_layout.zig:4-22`):** [`BlockHeader`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig#L4-L13) places `padding: [3]u8 = [_]u8{ 0, 0, 0 }` followed by `align_offset: u32 = 0` immediately before `next`, enforced by `comptime` checks requiring `@sizeOf(BlockHeader) == 40`, `@alignOf(BlockHeader) == 8`, `@offsetOf(BlockHeader, "align_offset") == 20`, and `@offsetOf(BlockHeader, "next") == 24`.
+   - **Allocation Tracking & Remainder Reset (`heap_core.zig:54-72, 210-341`):** [`tryAllocateFromFreeList()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L210-L341) stores `block.align_offset = align_offset_u32` on allocated blocks (including unsplit blocks carrying tail slack) while resetting `.align_offset = 0` on split remainder free blocks and on coalesced blocks in [`coalesceWithNext()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L54-L72) (with `canary == CANARY` checks).
+   - **Exact-Pointer Validation & Boundary Guards (`heap_core.zig:386-445`):** [`HeapAllocator.deallocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L386-L445) rejects `!self.initialized` or out-of-range pointers (`error.PointerOutOfBounds`), validates every walked block's `[heap_start, current_heap_end]` address/size boundaries before testing payload containment (`error.CorruptBlockHeader`), preserves `MAGIC_USED`/`CANARY` (`error.CorruptBlockHeader`), `is_free` (`error.DoubleFree`), and `align_offset <= block.size` / `block.size - align_offset >= 16` checks, and enforces exact pointer equality `raw_addr == expected_ptr` where `expected_ptr = payload_start + block.align_offset` (returning `error.BlockHeaderNotFound` on alignment-padding, header, interior, or tail-slack pointers before mutating any state).
+2. **Execution Evidence & Provenance Boundary (Implementation-Agent-Reported Only):**
+   - **Host Fake-Backend Tests ([`tests/heap_test.zig:639-715`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L639-L715), `"Heap 15"` + `assertListInvariants`):** Implementation agent (Hydrogen) reported `54/54` host unit tests passing uncached across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`, including `"Heap 15"` Part A (split block rejecting `p2 - 8` padding, header interior, `p2 + 1`, `p2 + 64`, `p2 + 128`, and corrupt `align_offset` bounds with zero state mutation) and Part B (unsplit 4000@64 block rejecting `p_slack - 8` padding, `p_slack + 1`, and `p_slack + 4016` tail slack), verified against page-aligned host buffers in `FakeHeapBackend`.
+   - **Kernel Build & QEMU Boot Tests ([`kernel/src/mm/heap.zig:177-190`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L177-L190)):** Implementation agent reported clean 4-mode kernel compilation (`0` `F-01` SIMD/x87 matches) and passing `Debug`/`ReleaseSafe` QEMU smoke boots executing Ring 0 `heap.testHeap()`, which verifies `core.deallocate(b2 - 8)`, `core.deallocate(b2 + 1)`, and `core.deallocate(b2 + 128)` return `error.BlockHeaderNotFound`. Unsplit tail-slack free rejection (`Heap 15` Part B) is verified in host unit tests only.
 
-**Technical explanation:**  
-`BlockHeader` is 40 bytes (`HEADER_SIZE = 40 = 0x28`). When `block` starts at a page-aligned address such as `HEAP_START = 0xffff_9000_0000_0000`, `payload_start` is `0xffff_9000_0000_0028` (only 8-byte aligned). Even for a standard 16-byte-aligned allocation, `allocate()` rounds `aligned_payload` up to `0xffff_9000_0000_0030` (`align_offset = 8`) and returns `0xffff_9000_0000_0030`. Because `BlockHeader` does not record `aligned_payload` (or `align_offset`), `deallocate()` uses the range check `raw_addr >= payload_start and raw_addr < payload_end`, silently accepting:
-1. **Alignment-padding pointers** in `[payload_start, aligned_payload)`.
-2. **Interior pointers** in `(aligned_payload, aligned_payload + size)`.
-3. **Unsplit tail-slack pointers** in `[aligned_payload + size, payload_end)`.
-
-*(Note: `F-10B` Part 3 at `b3cf68bbfc659be339b24cf8b3110be7eb159b53` intentionally extracted the existing `deallocate()` range check into `heap_core.zig` without fixing `F-06`.)*
-
-**Reproduction scenario:**  
-```zig
-const p = heap.allocate(64, 16).?; // returns 0xffff_9000_0000_0030 (payload_start = 0x...0028, payload_end = 0x...0070)
-heap.deallocate(p + 17);           // 0xffff_9000_0000_0041 is inside [0x...0028, 0x...0070) -> silently frees `p`!
-```
-
-**Impact:**  
-Silently frees active allocations when passed an interior or offset pointer, masking caller pointer-arithmetic bugs and causing use-after-free heap corruption.
-
-**Recommended correction:**  
-Store `align_offset: u32` inside [`BlockHeader`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig#L4-L12) (replacing 4 of the 7 `padding: [7]u8` bytes so `@sizeOf(BlockHeader)` remains 40 bytes), and require `raw_addr == payload_start + block.align_offset` in [`HeapAllocator.deallocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L189-L208), returning `error.BlockHeaderNotFound` (which panics in `heap.deallocate()`) if `raw_addr` does not match the exact returned payload pointer.
-
-**Regression tests:**  
-1. Host unit test in [`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig) verifying `deallocate()` succeeds for the exact pointer `p = allocate(128, 64).?` and rejects `p - 8` (alignment padding), `p + 1` (interior pointer), and `p + 128` (tail slack).
+**Historical Evidence (Baseline `c10c05f1` through `c1ef192b`):**
+Prior to `18dabd7c`, [`HeapAllocator.deallocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig) (extracted verbatim from `heap.zig` in `b3cf68b`) accepted any address within `[payload_start, payload_start + block.size)`, silently freeing allocations on alignment-padding pointers in `[payload_start, aligned_payload)`, interior pointers, or unsplit tail-slack pointers.
 
 **Dependencies:**  
-Host test harness provided by completed `F-10` (`F-10B` Part 3).
+Host test harness provided by completed `F-10` (`F-10B` Part 3); arithmetic and split-bound hardening coordinated with `F-12`.
 
 ---
 
@@ -580,7 +557,7 @@ Related to `F-10` (`F-10B` Part 2) and `F-13`.
 
 ### [F-10] Host unit test suite lacks a testable kernel module architecture for pure and stateful PMM, VMM, and Heap cores
 
-**Status:** FIXED (Independently Source-Audited across `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`, `bc2efdb0e673a6086f59e5ad0ca1669216f8c604`, `0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6`, `b3cf68bbfc659be339b24cf8b3110be7eb159b53`, and `c1ef192b336ba548ac0acb5340d92143bdad7994`; `47/47` Host Unit Tests Across All 4 Optimization Modes and `Debug`/`ReleaseSafe` QEMU Smoke Tests Agent-Reported)
+**Status:** FIXED (Independently Source-Audited across `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`, `bc2efdb0e673a6086f59e5ad0ca1669216f8c604`, `0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6`, `b3cf68bbfc659be339b24cf8b3110be7eb159b53`, and `c1ef192b336ba548ac0acb5340d92143bdad7994`; Extended to `54/54` Host Unit Tests at `18dabd7`/`0092cf3` Across All 4 Optimization Modes and `Debug`/`ReleaseSafe` QEMU Smoke Tests Implementation-Agent-Reported)
 
 **Severity:** HIGH (Resolved)
 
@@ -613,8 +590,8 @@ Build test graph ([`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig))
    - [`kernel/src/mm/heap.zig:1-175`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L1-L175) binds `HeapAllocator` (`HEAP_START`, `HEAP_MAX_SIZE`) to `vmm.getActivePml4()`, `pmm.allocPage()`, `vmm.mapPage(..., vmm.Flags.WRITABLE)`, and `pmm.freePage()`, preserving all public globals (`current_heap_end`, `head_block`, `initialized`, `total_allocated_bytes`, `total_freed_bytes`), `init`, `allocate`, `deallocate`, `vtable`, `allocator`, `testHeap`, and `@panic` strings.
    - [`tests/heap_test.zig:1-631`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L1-L631) imports `@import("heap_core")` (`build.zig:189-203`) and runs 14 stateful host tests (`Heap 01`–`Heap 14`) against `heap_core.HeapAllocator` over page-aligned host buffers (`FakeHeapBackend`).
 5. **Unified `zig build test` Target Architecture (`build.zig:123-210`):**
-   - `unit_test_step` (`b.step("test", "Run host unit tests")`) depends on all four test artifacts (`run_unit_tests` [7 tests in `tests/unit_test.zig`], `run_pmm_tests` [16 tests in `tests/pmm_test.zig`], `run_vmm_tests` [10 tests in `tests/vmm_test.zig`], and `run_heap_tests` [14 tests in `tests/heap_test.zig`]) for an aggregate of **47 host unit tests** (note that stateful tests reside in dedicated `pmm_test.zig`, `vmm_test.zig`, and `heap_test.zig` targets wired into `zig build test` rather than inside `tests/unit_test.zig`).
-   - **Provenance Boundary:** Source architecture across all 12 files was independently audited by Argon through `c1ef192b336ba548ac0acb5340d92143bdad7994`; uncached execution of `47/47` host tests across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`, 4-mode kernel compilation, and `Debug`/`ReleaseSafe` QEMU smoke tests are implementation-agent-reported.
+   - `unit_test_step` (`b.step("test", "Run host unit tests")`) depends on all four test artifacts (`run_unit_tests` [7 tests in `tests/unit_test.zig`], `run_pmm_tests` [16 tests in `tests/pmm_test.zig`], `run_vmm_tests` [10 tests in `tests/vmm_test.zig`], and `run_heap_tests` [21 tests in `tests/heap_test.zig` at `0092cf3`, expanded from 14 at `b3cf68b`]) for an aggregate of **54 host unit tests** (note that stateful tests reside in dedicated `pmm_test.zig`, `vmm_test.zig`, and `heap_test.zig` targets wired into `zig build test` rather than inside `tests/unit_test.zig`).
+   - **Provenance Boundary:** Source architecture across all 12 files was independently audited by Argon through `c1ef192b336ba548ac0acb5340d92143bdad7994` (`F-06`/`F-11`/`F-12` heap additions in `18dabd7`/`0092cf3` independently reviewed by ChatGPT); uncached execution of `54/54` host tests across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`, 4-mode kernel compilation, and `Debug`/`ReleaseSafe` QEMU smoke tests are implementation-agent-reported.
 
 **Historical Evidence (Baseline `c10c05f1`):**
 At baseline `c10c05f1`, `tests/unit_test.zig` duplicated 5 pure helpers/structs locally with zero `@import` edges into `kernel/src/`, and stateful PMM, VMM, and Heap algorithms were coupled directly to Limine globals, HHDM pointers, `HEAP_START`, and privileged CPU instructions (`CR3`, `invlpg`).
@@ -626,57 +603,33 @@ Provides the host unit test foundation for memory-management findings `F-06`–`
 
 ### [F-11] Heap `allocate()` omits alignment padding in `pages_needed` and ignores partial expansion progress in `expandHeap()`
 
-**Status:** VERIFIED
+**Status:** FIXED (Independently Source-Reviewed at `0092cf37f8c26cbdcea1c1d5eba98676b2542667` by ChatGPT following `18dabd7c3f62345b4970f8a4baf3016197471e11`; Host Production-Core Regression Tests `Heap 16`–`Heap 18` & Exact-Sequence `Heap 20` Across All 4 Optimization Modes Implementation-Agent-Reported Passing; Host Fake-Backend Coverage Only — Exact 9-Page/Partial-Failure/Init-Retry Permutations Not Triggered Under Normal QEMU Boot)
 
-**Severity:** MEDIUM
+**Severity:** MEDIUM (Resolved)
 
 **Confidence:** HIGH
 
 **Affected component:**  
-Kernel heap allocator core ([`kernel/src/mm/heap_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig)) and kernel heap adapter ([`kernel/src/mm/heap.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig)).
+Kernel heap allocator core ([`kernel/src/mm/heap_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig)), kernel heap adapter ([`kernel/src/mm/heap.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig)), and heap host test suite ([`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig)).
 
 **Source location:**  
-- [`kernel/src/mm/heap_core.zig:80-131`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L80-L131) and [`kernel/src/mm/heap_core.zig:180-187`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L180-L187)
-- [`kernel/src/mm/heap.zig:45-54`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L45-L54)
+- [`kernel/src/mm/heap_core.zig:16-20, 48-52, 103-208, 343-384`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L103-L208)
+- [`kernel/src/mm/heap.zig:14, 47-61`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L47-L61)
+- [`tests/heap_test.zig:717-902, 955-990`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L955-L990)
 
-**Evidence:**  
-In [`HeapAllocator.allocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L180-L187) (extracted in `b3cf68b`):
-```zig
-const page_size_usize: usize = @intCast(PAGE_SIZE);
-const pages_needed = (aligned_size + HEADER_SIZE + page_size_usize - 1) / page_size_usize;
-if (self.expandHeap(@max(pages_needed, 4))) {
-    return self.allocate(size, alignment);
-}
+**Resolution & Review Evaluation (v1.9, Commits `18dabd7c` & `0092cf37f8c26cbdcea1c1d5eba98676b2542667`):**
+1. **Independent Source & Diff Disposition (Reviewed by ChatGPT at `0092cf3`):**
+   - **Alignment- & Tail-Aware Expansion Sizing (`heap_core.zig:48-52, 172-208`):** [`coalescingFreeTail()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L172-L187) detects whether the last block is a valid free block whose payload cleanly terminates at `current_heap_end`. [`pagesNeededForExpansion()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L189-L208) computes the exact alignment offset (`alignUpChecked(payload_addr, align_val_u64) - payload_addr`) either from the free tail block's payload (`deficit = total_needed - tail.size`) or from `current_heap_end + HEADER_SIZE` when starting a new trailing block, and rounds up via overflow-safe [`ceilDivU64()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L48-L52).
+   - **Clamped Batch Expansion & Partial-Progress Retry (`heap_core.zig:362-383`):** [`HeapAllocator.allocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L362-L383) verifies `pages_needed <= remaining_pages`, clamps the batch request with `@min(@max(pages_needed, @as(u64, 4)), remaining_pages)` so small remaining headroom (e.g., 2 pages) is mapped cleanly without over-requesting 4 pages, records `end_before = self.current_heap_end`, and retries [`tryAllocateFromFreeList()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L210-L341) non-recursively whenever `expanded_full or self.current_heap_end > end_before`.
+   - **Checked Initialization & Partial-Init Resumption (`heap_core.zig:16-20, 106-127`, `heap.zig:14, 47-61`):** [`HeapAllocator.init()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L106-L127) returns `InitError!void` (`InvalidInitialPageCount`, `CapacityExceeded`, `ExpansionFailed`), rejecting zero or over-capacity page counts and leaving `self.initialized = false` (preserving already-mapped pages at `current_heap_end`/`head_block`) if `expandHeap()` fails partway so retries map only `initial_pages_u64 - already_mapped_pages` without remapping earlier virtual addresses. [`kernel/src/mm/heap.zig:47-61`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L47-L61) exposes `tryInit()` and keeps `pub fn init(initial_pages: usize) void` synchronized with explicit `@panic` messages on `InitError`.
+2. **Execution Evidence & Provenance Boundary (Implementation-Agent-Reported Only):**
+   - **Host Fake-Backend Regression Tests (`tests/heap_test.zig:717-902, 955-990`):** Implementation agent (Hydrogen) reported `54/54` uncached host tests passing across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`:
+     - [`"Heap 20"`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L955-L990) reproduces the exact documented F-11 sequence (`heap.init(4)` $\to$ `allocate(16320, 16)` $\to$ `allocate(16336, 64)`), verifying the second allocation succeeds cleanly by mapping **5 additional pages (9 total pages)** in one expansion without repeated expansion, preserving alignment, payload integrity, list invariants, and single-block coalescing on free.
+     - [`"Heap 16"`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L717-L785), [`"Heap 17"`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L787-L851), and [`"Heap 18"`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L853-L902) cover `16320@128`, coalescing-tail 1-page tight fit, 2-page remaining headroom clamping, partial-expansion success/non-recursive OOM preservation, and `init(0)`/`CapacityExceeded`/partial-`init` retry without remapping.
+   - **Kernel Build & QEMU Boot Tests:** Implementation agent reported clean 4-mode kernel builds (`0` SIMD/x87 matches) and passing `Debug`/`ReleaseSafe` QEMU smoke boots executing `heap.init(4)` and `heap.testHeap()` (`[HEAP] Dynamic memory allocator initialized and verified.`); synthetic multi-page expansion/partial-failure/init-retry permutations are verified in host fake-backend unit tests only.
 
-return null;
-```
-And in [`HeapAllocator.init()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L88-L90):
-```zig
-_ = self.expandHeap(initial_pages);
-
-self.initialized = true;
-```
-
-**Technical explanation:**  
-1. **Missing alignment padding in `pages_needed`:** Inside the search loop (`heap_core.zig:143-146`), the required block payload is `total_needed = aligned_size + align_offset`, where `align_offset` is `8` bytes for `align_val == 16` on a page-aligned block (`HEADER_SIZE = 40`) and up to `align_val - 8` bytes for larger alignments. Line 181 omits `align_offset` when computing `pages_needed`, so `expandHeap()` can map a block that is still smaller than `total_needed`, triggering a second recursive `expandHeap()` call.
-2. **False allocation failure on partial expansion (no memory leak):** In `expandHeap(page_count)` (`heap_core.zig:93-131`), each mapped page is immediately initialized as a `FREE` `BlockHeader`, linked into `head_block`, and coalesced with `curr` if `curr.is_free`. Thus, partial expansion does **not** leak physical frames or virtual pages (`R-06`, also exercised in `tests/heap_test.zig:495-529` `"Heap 11"`). However, because `allocate()` passes `@max(pages_needed, 4)` and only retries if `expandHeap()` returns `true` for all requested pages (and ignores any pre-existing free capacity in a `FREE` tail block), `allocate()` falsely returns `null` if `expandHeap()` stops after mapping `k < @max(pages_needed, 4)` pages even when those `k` pages (plus any coalesced free tail block) are large enough to satisfy the request.
-3. **Unchecked `init()` expansion:** `HeapAllocator.init()` (`heap_core.zig:88`) ignores the return value of `_ = self.expandHeap(initial_pages);` and sets `self.initialized = true`.
-
-*(Note: `F-10B` Part 3 at `b3cf68bbfc659be339b24cf8b3110be7eb159b53` intentionally extracted these existing behaviors into `heap_core.zig` without fixing `F-11`.)*
-
-**Reproduction scenario:**  
-1. **Under-expansion:** After `heap.init(4)` and `b1 = heap.allocate(16320, 16)` (which marks the initial 4-page block `USED` without splitting), calling `heap.allocate(16336, 64)` computes `pages_needed = (16336 + 40 + 4095) / 4096 = 4`. `expandHeap(4)` creates a 4-page free block at `heap_start + 0x4000` with `size = 16344`. On the recursive `allocate(16336, 64)` call, `payload_addr = +0x4028`, `aligned_payload = +0x4040`, `align_offset = 24`, and `total_needed = 16336 + 24 = 16360 > 16344`, forcing a second recursive `expandHeap(4)` call (8 pages = 32 KiB mapped for a 16 KiB request).
-2. **False OOM on partial expansion:** When 2 pages (`8,192` B) remain before `heap_max_size`, `allocate(4096, 16)` computes `pages_needed = 2`, calls `expandHeap(@max(2, 4))` = `expandHeap(4)`, maps 2 pages (`8,152` B free block), hits `heap_max_size` on iteration 2, returns `false`, and `allocate(4096, 16)` returns `null`.
-
-**Impact:**  
-Unnecessary multi-page over-expansion on aligned allocations (`alignment >= 64`) and false Out-Of-Memory returns when fewer than 4 pages remain before `HEAP_MAX_SIZE` or PMM exhaustion.
-
-**Recommended correction:**  
-Include worst-case alignment padding in `pages_needed`, account for an existing `FREE` tail block's capacity when calculating additional pages needed, retry `allocate()` (or clamp `page_count` to `>= pages_needed`) if `expandHeap()` mapped enough pages to satisfy the request, and assert `expandHeap(initial_pages)` succeeds in `init()`.
-
-**Regression tests:**  
-1. Host unit test in [`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig) verifying `init(4)` $\to$ `allocate(16320, 16)` $\to$ `allocate(16336, 64)` expands the heap once (by 5 pages) rather than twice (8 pages).
-2. Host unit test in [`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig) verifying `allocate(4096, 16)` succeeds when only 2 pages of headroom remain below `heap_max_size`.
+**Historical Evidence (Baseline `c10c05f1` through `c1ef192b`):**
+Prior to `18dabd7c`, `allocate()` computed `pages_needed = (aligned_size + HEADER_SIZE + page_size_usize - 1) / page_size_usize` without `align_offset` or tail accounting, passed `@max(pages_needed, 4)` unconditionally, retried only on full `expandHeap() == true`, and `_ = self.expandHeap(initial_pages)` in `init()` ignored expansion failure while unconditionally setting `self.initialized = true`.
 
 **Dependencies:**  
 Related to `F-12`; host test harness provided by completed `F-10` (`F-10B` Part 3).
@@ -685,59 +638,36 @@ Related to `F-12`; host test harness provided by completed `F-10` (`F-10B` Part 
 
 ### [F-12] Unchecked integer arithmetic overflow and missing power-of-two `alignment` validation in `heap.allocate()`
 
-**Status:** VERIFIED
+**Status:** FIXED (Independently Source-Reviewed at `0092cf37f8c26cbdcea1c1d5eba98676b2542667` by ChatGPT; Host Production-Core Regression Tests `Heap 19` & `Heap 21` Across All 4 Optimization Modes Implementation-Agent-Reported Passing; Live Ring 0 `heap.testHeap()` Exercises `align=0` Compatibility and `maxInt(usize)` / `3` / `24` / `HEAP_MAX_SIZE * 2` Non-Mutation Under QEMU, While Corrupted Metadata Guards Are Verified in Host Unit Tests Only)
 
-**Severity:** MEDIUM
+**Severity:** MEDIUM (Resolved)
 
 **Confidence:** HIGH
 
 **Affected component:**  
-Kernel heap allocator core ([`kernel/src/mm/heap_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig)) and kernel heap adapter ([`kernel/src/mm/heap.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig)).
+Kernel heap allocator core ([`kernel/src/mm/heap_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig)), kernel heap adapter ([`kernel/src/mm/heap.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig)), and heap host test suite ([`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig)).
 
 **Source location:**  
-- [`kernel/src/mm/heap_core.zig:133-147`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L133-L147) and [`kernel/src/mm/heap_core.zig:180-182`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L180-L182)
-- [`kernel/src/mm/heap.zig:50-54`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L50-L54)
+- [`kernel/src/mm/heap_core.zig:41-52, 210-384, 386-445`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L210-L445)
+- [`kernel/src/mm/heap.zig:192-210`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L192-L210)
+- [`tests/heap_test.zig:904-953, 992-1033`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L904-L1033)
 
-**Evidence:**  
-In [`HeapAllocator.allocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L133-L147) (extracted in `b3cf68b`):
-```zig
-pub fn allocate(self: *Self, size: usize, alignment: usize) ?[*]u8 {
-    if (size == 0) return null;
+**Resolution & Review Evaluation (v1.9, Commits `18dabd7c` & `0092cf37f8c26cbdcea1c1d5eba98676b2542667`):**
+1. **Independent Source & Diff Disposition (Reviewed by ChatGPT at `0092cf3`):**
+   - **Compatibility-Preserving Alignment Validation (`heap_core.zig:346-352`):** [`HeapAllocator.allocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L343-L357) rejects nonzero non-power-of-two alignments via `if (alignment != 0 and !std.math.isPowerOfTwo(alignment)) return null;` (rejecting inputs such as `3` and `24`), while **preserving compatibility for `alignment == 0`**, which evaluates through `const align_val_usize: usize = @max(alignment, 16);` to the default 16-byte System V ABI alignment (`0`, `1`, `2`, `4`, `8`, and `16` all enforce 16-byte minimum alignment). `align_val_u64 > self.heap_max_size` returns `null` prior to list traversal.
+   - **Checked Sizing & Expansion Arithmetic (`heap_core.zig:41-52, 353-384`):** Added overflow-checked [`alignUpChecked()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L41-L46) and [`ceilDivU64()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L48-L52). [`allocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L354-L356) computes `aligned_size_u64 = alignUpChecked(size, 16)` and checks `aligned_size_u64 <= self.heap_max_size` before traversing blocks or expanding backing memory, guaranteeing invalid requests perform zero heap state mutations.
+   - **Checked Free-List Split & Deallocate Boundary Arithmetic (`heap_core.zig:210-341, 386-445`):** In [`tryAllocateFromFreeList()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L210-L341), block header bounds `[heap_start, current_heap_end)`, `block_end = payload_addr + block.size <= current_heap_end`, `user_end = aligned_payload + aligned_size <= block_end`, split address arithmetic (`split_addr`, `split_header_end`, `split_block_end` completely inside `[heap_start, current_heap_end)` and `[payload_addr, block_end]`), and `total_allocated_bytes + allocated_block_size` are all validated with `std.math.add`/`std.math.cast` **before** `@ptrFromInt` or any mutation to `block.next`, `block.prev`, `n.prev`, `block.size`, or accounting counters. [`deallocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L386-L445) likewise validates walked block ranges against `[heap_start, current_heap_end]`, casts `block.align_offset`, checks `payload_start`, `expected_ptr`, and `total_freed_bytes + block.size` via checked arithmetic before mutating state, without weakening `MAGIC_USED`, `CANARY`, or `DoubleFree` checks.
+2. **Execution Evidence & Provenance Boundary (Implementation-Agent-Reported Only):**
+   - **Host Fake-Backend Regression Tests (`tests/heap_test.zig:904-953, 992-1033`):** Implementation agent (Hydrogen) reported `54/54` uncached host unit tests passing across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`:
+     - [`"Heap 19"`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L904-L953) explicitly verifies `allocate(64, 0)` succeeds with a 16-byte-aligned pointer, reads/writes/frees cleanly, tests valid powers of two `{0, 1, 2, 4, 8, 16, 32, 64, 256}`, and verifies `0`-size, `maxInt(usize)`, `maxInt(usize) - 7`, nonzero non-power-of-two alignments `3` and `24`, `maxSize() * 2`, `maxSize()`, and `maxSize() - HEADER_SIZE + 16` all return `null` with zero mutation to `mapped_pages`, `map_calls`, `total_allocated_bytes`, `total_freed_bytes`, `current_heap_end`, block count, or poisoned unmapped pages.
+     - [`"Heap 21"`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L992-L1033) verifies corrupted free/used `block.size` metadata exceeding mapped heap bounds is rejected in `allocate()` and `deallocate()` with zero mutation to free-list links or byte counters.
+   - **Kernel Build & QEMU Boot Tests ([`kernel/src/mm/heap.zig:192-210`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L192-L210)):** Implementation agent reported clean 4-mode kernel compilation (`0` `F-01` matches) and passing `Debug`/`ReleaseSafe` QEMU smoke boots running Ring 0 `heap.testHeap()`, which verifies `allocate(64, 0)` succeeds with 16-byte alignment and verifies `maxInt(usize)`, `3`, `24`, and `HEAP_MAX_SIZE * 2` fail without mutating `total_allocated_bytes` or `current_heap_end`. Corrupted metadata injection (`Heap 21`) is host-test only.
 
-    const align_val = @max(alignment, 16);
-    // Align request size to 16 bytes for System V alignment
-    const aligned_size = (size + 15) & ~@as(usize, 15);
-    ...
-            const payload_addr = @intFromPtr(block) + HEADER_SIZE;
-            const aligned_payload = (payload_addr + align_val - 1) & ~(align_val - 1);
-            const align_offset = aligned_payload - payload_addr;
-            const total_needed = aligned_size + align_offset;
-    ...
-    const page_size_usize: usize = @intCast(PAGE_SIZE);
-    const pages_needed = (aligned_size + HEADER_SIZE + page_size_usize - 1) / page_size_usize;
-```
-
-**Technical explanation:**  
-1. **Arithmetic overflow:** Passing `size > std.math.maxInt(usize) - 15` overflows `size + 15` (`heap_core.zig:138`), and large `size` or `alignment` values overflow `payload_addr + align_val - 1` (`line 144`), `aligned_size + align_offset` (`line 146`), or `aligned_size + HEADER_SIZE + page_size_usize - 1` (`line 181`), triggering an integer-overflow panic in `Debug`/`ReleaseSafe` (or wrapping in `ReleaseFast`) instead of returning `null`.
-2. **Unvalidated `alignment` in `pub fn allocate`:** While `vtableAlloc`/`heapAlloc` receives `std.mem.Alignment`, `pub fn allocate(size: usize, alignment: usize)` does not check `std.math.isPowerOfTwo(alignment)`. For a non-power-of-two `alignment > 16` (e.g., `24`), `(payload_addr + align_val - 1) & ~(align_val - 1)` produces an unaligned address.
-
-*(Note: `F-10B` Part 3 at `b3cf68bbfc659be339b24cf8b3110be7eb159b53` intentionally extracted `allocate()` into `heap_core.zig` without fixing `F-12`.)*
-
-**Reproduction scenario:**  
-1. `heap.allocate(std.math.maxInt(usize), 16)` panics with `integer overflow` at `heap_core.zig:138` instead of returning `null`.
-2. `heap.allocate(64, 24)` on `payload_addr = 0xffff_9000_0000_0028` computes `(0x...0028 + 23) & ~23 = 0xffff_9000_0000_0028`, which is neither 24-byte aligned nor 16-byte aligned.
-
-**Impact:**  
-Kernel panic on overflowing allocation requests and misaligned pointers if `allocate()` is called directly with a non-power-of-two alignment.
-
-**Recommended correction:**  
-Validate `if (alignment != 0 and !std.math.isPowerOfTwo(alignment)) return null;` (or panic on invalid alignment) and bound `if (size > self.heap_max_size or align_val > self.heap_max_size) return null;` at the top of `HeapAllocator.allocate()`.
-
-**Regression tests:**  
-1. Host unit test in [`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig) verifying `allocate(std.math.maxInt(usize), 16)` and `allocate(64, 24)` return `null` cleanly.
+**Historical Evidence (Baseline `c10c05f1` through `18dabd7c`):**
+Prior to `18dabd7c`, `allocate()` performed unchecked `size + 15`, `payload_addr + align_val - 1`, and `aligned_size + align_offset` arithmetic and lacked `isPowerOfTwo` checks. Commit `18dabd7c` added checked sizing and power-of-two validation, while temporarily rejecting `alignment == 0`; corrective commit `0092cf3` restored `alignment == 0` -> 16-byte compatibility and added checked split-address, block-range, and `deallocate()` boundary guards.
 
 **Dependencies:**  
-Related to `F-11`; host test harness provided by completed `F-10` (`F-10B` Part 3).
+Related to `F-06` and `F-11`; host test harness provided by completed `F-10` (`F-10B` Part 3).
 
 ---
 
@@ -1158,33 +1088,31 @@ The following claims from prior audit reports and earlier revisions were indepen
 
 ## 6. Prioritization & Phase 1 Hardening Plan
 
-> **Governance Gate Notice:** This section defines the proposed engineering sequence for **Phase 1 Hardening**. It does **not** authorize Phase 2 (`NOT AUTHORIZED`) and does **not** mark Phase 1 as Human Approved (`Pending Human Review`). Completing `F-10` (or `F-01`, `F-07`, `F-08`, `F-09`, `F-13`, `F-14`, `F-16`) does not constitute Project Owner approval of Phase 1 or Phase 2. Only the Project Owner may approve milestone gates.
+> **Governance Gate Notice:** This section defines the proposed engineering sequence for **Phase 1 Hardening**. It does **not** authorize Phase 2 (**NOT AUTHORIZED**) and does **not** mark Phase 1 as Human Approved (**Pending Human Review**). Resolving `F-10` (or `F-01`, `F-06`, `F-07`, `F-08`, `F-09`, `F-11`, `F-12`, `F-13`, `F-14`, `F-16`) does not constitute Project Owner approval of Phase 1 or Phase 2. Only the Project Owner may approve milestone gates.
 
 ### P0 — Must Fix Before Further Kernel Development (0 Active Findings — All 3 Resolved)
 
 **Included Active Findings:** None (`F-01`, `F-10`, and `F-14` are `FIXED`)
 - **`F-01` (`FIXED` at `515aa91`):** Freestanding kernel target in [`build.zig:4-20`](file:///home/leevawn/Projects/zig-os/build.zig#L4-L20) subtracts `.x87`, `.mmx`, `.sse`, `.sse2`, `.avx`, `.avx2` and adds `.soft_float`.
 - **`F-14` (`FIXED` at `7711468`):** All public build/run/debug/test entrypoints enforce unconditional fresh builds, `ReleaseSafe` default optimization, a non-recursive Zig build graph, and 3-way kernel ELF SHA-256 provenance verification prior to QEMU launch.
-- **`F-10` (`FIXED` across `9df21f8`, `bc2efdb`, `0156e91`, `b3cf68b`, and `c1ef192`):** `zig build test` ([`build.zig:123-210`](file:///home/leevawn/Projects/zig-os/build.zig#L123-L210)) compiles and runs four host test targets directly against production kernel modules with zero test-side algorithm duplication:
+- **`F-10` (`FIXED` across `9df21f8`, `bc2efdb`, `0156e91`, `b3cf68b`, `c1ef192`, `18dabd7`, and `0092cf3`):** `zig build test` ([`build.zig:123-210`](file:///home/leevawn/Projects/zig-os/build.zig#L123-L210)) compiles and runs four host test targets directly against production kernel modules with zero test-side algorithm duplication (`54` total host unit tests):
   - `unit_test` ([`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig)): 7 tests importing `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig` (`F-10A`).
   - `pmm_test` ([`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig)): 16 stateful tests importing `physical_core.zig` (`F-10B` Part 1 + `F-07`/`F-08`/`F-16` hardening).
   - `vmm_test` ([`tests/vmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/vmm_test.zig)): 10 stateful tests importing `virtual_core.zig` (`F-10B` Part 2 + `F-09`/`F-13` hardening).
-  - `heap_test` ([`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig)): 14 stateful tests importing `heap_core.zig` (`F-10B` Part 3).
+  - `heap_test` ([`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig)): 21 stateful tests importing `heap_core.zig` (`F-10B` Part 3 [14 tests] + `F-06`/`F-11`/`F-12` hardening [7 tests, `Heap 15`–`Heap 21` at `18dabd7`/`0092cf3`]).
 
 ---
 
-### P1 — Must Fix Before Phase 2 Authorization (6 Active Findings)
+### P1 — Must Fix Before Phase 2 Authorization (3 Active Findings)
 
-**Included Active Findings:** `F-03`, `F-04`, `F-06`, `F-11`, `F-12`, `F-15`
-*(Note: VMM findings `F-09` and `F-13` were resolved at `0156e91` in `virtual_core.zig` and `virtual.zig`, and PMM findings `F-07` and `F-08` were resolved at `c1ef192` in `physical_core.zig` and `physical.zig`).*
+**Included Active Findings:** `F-03`, `F-04`, `F-15`
+*(Note: VMM findings `F-09` and `F-13` were resolved at `0156e91` in `virtual_core.zig` and `virtual.zig`; PMM findings `F-07` and `F-08` were resolved at `c1ef192` in `physical_core.zig` and `physical.zig`; and Heap findings `F-06`, `F-11`, and `F-12` were resolved at `18dabd7`/`0092cf3` in `heap_layout.zig`, `heap_core.zig`, and `heap.zig`).*
 
-- **Dependencies:** Enabled by completed **P0** foundation (`F-01` SIMD prohibition, `F-10` host-testable core modules, and `F-14` rebuild/provenance pipeline). `F-04` requires updating/superseding [`ADR-0003`](file:///home/leevawn/Projects/zig-os/docs/adr/0003-limine-gdt-preservation-phase1.md); `F-15` coordinates with `F-01` and Phase 2 FPU context switching.
+- **Dependencies:** Enabled by completed **P0** foundation (`F-01` SIMD prohibition, `F-10` host-testable core modules, and `F-14` rebuild/provenance pipeline) and completed memory-management P1 hardening (`F-06`–`F-09`, `F-11`–`F-13`). `F-04` requires updating/superseding [`ADR-0003`](file:///home/leevawn/Projects/zig-os/docs/adr/0003-limine-gdt-preservation-phase1.md); `F-15` coordinates with `F-01` and Phase 2 FPU context switching.
 - **Required Implementation Tasks:**
   1. **`F-03`, `F-04`, & `F-15` (Interrupt Vector Protection, GDT/TSS/IST, Frame Verification, & `CR0.TS` Initialization):** Prohibit Ring 0 software `INT n` to hardware error-code exception vectors (`8, 10..14, 17, 21, 29, 30`), remap or keep masked the legacy 8259 PIC (`>= 0x20`), assign APIC interrupt vectors outside `0–31`, and preserve `DPL = 0` on exception gates (`F-03`, noting dynamic stack alignment alone does not repair a missing error-code slot); install a kernel-owned GDT and 64-bit TSS (`lgdt`, `ltr`) with a dedicated `IST1` stack for `#DF` (Vector 8) (`F-04`); clear `CR0.TS` (bit 3) alongside `CR0.EM` (bit 2) in [`cpu.enableSse()`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/cpu.zig#L117-L129) so `CR0.TS == 0` is guaranteed under Limine Base Revision 3 (`F-15`).
-  2. **`F-06`, `F-11`, & `F-12` (Heap Hardening in `heap_layout.zig` / `heap_core.zig`):** Store `align_offset: u32` in [`BlockHeader`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig#L4-L12) and enforce `raw_addr == payload_start + block.align_offset` in [`HeapAllocator.deallocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L189-L208); include alignment padding in `pages_needed` and handle partial expansion / free tail blocks in [`HeapAllocator.expandHeap()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L93-L131); check `init()` expansion status; validate `std.math.isPowerOfTwo(alignment)` and `size <= self.heap_max_size` before arithmetic in [`HeapAllocator.allocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L133-L187).
 - **Required Regression Tests:**
   - **`F-15` (Dual-Layer `CR0.TS` Verification):** (a) Privileged in-kernel QEMU runtime test that deliberately sets `CR0.TS = 1` immediately before calling `cpu.enableSse()` (with zero intervening FPU/SSE instructions) and verifies `(cpu.readCr0() & ((1 << 2) | (1 << 3))) == 0` afterward, and (b) host unit test in [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig) verifying the pure `computeSseCr0()` bit-mask helper clears `CR0.TS` and `CR0.EM` on synthetic `CR0` values.
-  - Host unit tests in [`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig) (plus in-kernel self-tests) covering interior/padding/slack pointer free rejection (`F-06`), `allocate(16336, 64)` single-expansion and 2-page headroom behavior (`F-11`), and overflow/non-power-of-two alignment rejection (`F-12`).
   - Three-regime QEMU interrupt frame verification (`F-04`): (a) same-CPL (`IST = 0`) exceptions verifying saved `frame.rsp` and `frame.ss`, (b) `IST1` stack-switched `#DF` verifying `IST1` stack pointer and interrupted `frame.rsp`/`frame.ss`, and (c) `CPL 3 -> CPL 0` privilege transition frame verification once Ring 3 exists.
 - **Acceptance Criteria:** All CPU `CR0`/`CR4`, PMM, VMM, Heap, GDT/TSS, and IDT invariants pass host unit tests (`zig build test`) and fresh-build QEMU runtime verification in both `Debug` and `ReleaseSafe` modes.
 
