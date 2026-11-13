@@ -5,6 +5,7 @@ pub const panic = @import("panic.zig").panicHandler;
 const limine = @import("limine.zig");
 const cpu = @import("arch/x86_64/cpu.zig");
 const serial = @import("drivers/serial/serial.zig");
+const pic = @import("arch/x86_64/interrupts/pic.zig");
 const idt = @import("arch/x86_64/idt/idt.zig");
 const pmm = @import("mm/physical.zig");
 const vmm = @import("mm/virtual.zig");
@@ -51,8 +52,19 @@ export fn _start() callconv(.c) noreturn {
         cpu.haltLoop();
     }
 
+    // 6b. Remap legacy 8259 PIC out of exception vector range and mask all IRQs
+    if (!pic.remapAndMask()) {
+        serial.writeString("[FATAL] Legacy 8259 PIC remap/mask verification failed.\n");
+        cpu.haltLoop();
+    }
+    serial.writeString("[PIC] Legacy 8259 PIC remapped to 0x20-0x2F and masked (0xFF/0xFF).\n");
+
     // 7. Initialize and verify IDT (256 entries) & CPU Exception dispatch
     idt.init();
+    if (!idt.validateExceptionGates()) {
+        serial.writeString("[FATAL] IDT exception gate validation failed.\n");
+        cpu.haltLoop();
+    }
     if (!idt.testExceptionDispatch()) {
         serial.writeString("[FATAL] IDT exception dispatch self-test failed.\n");
         cpu.haltLoop();

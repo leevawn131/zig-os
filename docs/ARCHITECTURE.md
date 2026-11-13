@@ -27,6 +27,7 @@ In accordance with Phase 1 design requirements, Limine's GDT is documented and p
 
 ### 2.2 IDT & Assembly ISR Stubs
 - **256 Interrupt Gates**: Fully populated with 64-bit Interrupt Gate descriptors (`0x8E` = Present, DPL 0, 64-bit Interrupt Gate).
+- **Exception Gate Validation**: `idt.validateExceptionGates()` verifies during boot that IDTR points to `idt_table`, every gate (including exceptions `0..31`) uses `0x8E` (Present, DPL=0, 64-bit Interrupt Gate), current CS selector (`gdt.getCs()`), cleared reserved fields, exact `isr_stub_table[i]` offsets, and distinct exception stub addresses.
 - **IDTR Register**: Defined as `packed struct(u80)` (16-bit limit at offset 0, 64-bit base at offset 2, total 10 bytes).
 - **Error Code Normalization**:
   - Vectors 8, 10, 11, 12, 13, 14, 17, 21, 29, 30 push a CPU hardware error code.
@@ -55,6 +56,11 @@ When a page fault occurs:
   - Bit 2 (`U/S`): User mode vs. supervisor/kernel mode.
   - Bit 3 (`RSVD`): Reserved bit set in page table entry.
   - Bit 4 (`I/D`): Instruction fetch violation (NX).
+
+### 2.4 Interrupt Vector Policy & Legacy 8259 PIC Remapping
+- **Vector Space Partition (`kernel/src/arch/x86_64/interrupts/vectors.zig`)**: Vectors `0–31` are strictly reserved for CPU architectural exceptions (`FIRST_EXTERNAL_VECTOR = 32`); external IRQs, APIC/IOAPIC/LAPIC, MSI/MSI-X, IPIs, and general software interrupts are restricted to vectors `32–255`.
+- **Software `INT n` Isolation**: Only controlled `#BP` (`int $3`) self-testing and external vectors (`>= 32`) are allowed in kernel source; issuing `int <n>` for error-code vectors (`8, 10, 11, 12, 13, 14, 17, 21, 29, 30`) or non-breakpoint exception vectors is forbidden and caught statically by host tests.
+- **Legacy 8259 PIC Isolation (`kernel/src/arch/x86_64/interrupts/pic.zig`)**: Before IDT activation (while `IF=0`), `pic.remapAndMask()` remaps master/slave PICs to `0x20–0x27` / `0x28–0x2F` and masks all 16 IRQ lines (`0xFF`/`0xFF`) with IMR readback verification, preventing BIOS default PIC vectors (`0x08–0x0F`) from colliding with `#DF`/`#TS`/`#NP`/`#SS`/`#GP`/`#PF` or masking `sti` hazards.
 
 ---
 

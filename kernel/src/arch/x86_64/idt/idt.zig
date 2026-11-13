@@ -2,6 +2,7 @@
 const std = @import("std");
 const cpu = @import("../cpu.zig");
 const gdt = @import("../gdt/gdt.zig");
+const vectors = @import("../interrupts/vectors.zig");
 pub const handlers = @import("handlers.zig");
 
 pub const IdtEntry = extern struct {
@@ -29,11 +30,17 @@ pub const IdtDescriptor = packed struct(u80) {
     base: u64,
 };
 
-pub var idt_table: [256]IdtEntry align(16) = undefined;
+pub var idt_table: [vectors.IDT_ENTRY_COUNT]IdtEntry align(16) = undefined;
 pub var idtr: IdtDescriptor = undefined;
 
 // Exported from assembly stubs
-extern const isr_stub_table: [256]*const fn () callconv(.c) void;
+extern const isr_stub_table: [vectors.IDT_ENTRY_COUNT]*const fn () callconv(.c) void;
+
+fn entryOffset(entry: IdtEntry) u64 {
+    return (@as(u64, entry.offset_high) << 32) |
+        (@as(u64, entry.offset_mid) << 16) |
+        @as(u64, entry.offset_low);
+}
 
 pub fn init() void {
     // Force inclusion of the interrupt dispatcher export
@@ -42,10 +49,10 @@ pub fn init() void {
     const kernel_cs = gdt.getCs();
 
     // Populate all 256 IDT gates with their corresponding assembly stub
-    for (0..256) |i| {
+    for (0..vectors.IDT_ENTRY_COUNT) |i| {
         const handler_addr = @intFromPtr(isr_stub_table[i]);
         // 0x8E = Present (0x80) | DPL 0 (0x00) | 64-bit Interrupt Gate (0x0E)
-        idt_table[i].setGate(handler_addr, kernel_cs, 0x8E, 0);
+        idt_table[i].setGate(handler_addr, kernel_cs, vectors.IDT_GATE_FLAGS_KERNEL_INTERRUPT, 0);
     }
 
     idtr = IdtDescriptor{
@@ -54,6 +61,46 @@ pub fn init() void {
     };
 
     cpu.lidt(&idtr);
+}
+
+/// Validates all 256 IDT gates and enforces exception vector invariants:
+/// - IDTR limit and base match `idt_table`.
+/// - Every gate (including 0..31) is Present, DPL=0, 64-bit Interrupt Gate (0x8E),
+///   uses current kernel CS, has reserved bits cleared, and points to its exact ISR stub.
+/// - All 32 exception vectors map to distinct ISR stub addresses.
+pub fn validateExceptionGates() bool {
+    if (idtr.limit != @sizeOf(@TypeOf(idt_table)) - 1) return false;
+    if (idtr.base != @intFromPtr(&idt_table)) return false;
+
+    const expected_cs = gdt.getCs();
+
+    for (0..vectors.IDT_ENTRY_COUNT) |i| {
+        const entry = idt_table[i];
+        const expected_offset = @intFromPtr(isr_stub_table[i]);
+        if (expected_offset == 0) return false;
+
+        if (!vectors.isValidKernelInterruptGate(
+            entry.flags,
+            entry.ist,
+            entry.reserved,
+            entry.selector,
+            expected_cs,
+            entryOffset(entry),
+            expected_offset,
+        )) {
+            return false;
+        }
+    }
+
+    // Verify all 32 architectural exception vectors (0..31) target distinct ISR stubs.
+    for (0..vectors.EXCEPTION_VECTOR_COUNT) |a| {
+        const addr_a = @intFromPtr(isr_stub_table[a]);
+        for (a + 1..vectors.EXCEPTION_VECTOR_COUNT) |b| {
+            if (addr_a == @intFromPtr(isr_stub_table[b])) return false;
+        }
+    }
+
+    return true;
 }
 
 pub fn testExceptionDispatch() bool {

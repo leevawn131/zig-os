@@ -43,13 +43,15 @@ Every status assertion, milestone claim, and documentation update must utilize o
 
 ## 4. Test Categories & Execution Protocols
 
-### 4.1 Host-Side Unit Tests (`tests/unit_test.zig`)
+### 4.1 Host-Side Unit Tests (`tests/unit_test.zig`, `tests/pmm_test.zig`, `tests/vmm_test.zig`, `tests/heap_test.zig`, `tests/vector_policy_test.zig`)
 - **Execution Command**: `zig build test`
-- **Scope**: Memory calculations, paging address decomposition, bitfield encoding/decoding, bitmap frame indexing, allocator chunk header integrity.
+- **Scope**: Memory calculations, paging address decomposition, bitfield encoding/decoding, bitmap frame indexing, allocator chunk header integrity, interrupt vector reservation & PIC offset policy (`vectors.zig`), and static source scanning of `kernel/` (`.zig`, `.s`, `.S`, `.asm`) to forbid `int <n>` on error-code and non-breakpoint reserved exception vectors.
 - **Limitation**: Executes under host Linux virtual memory. Does **not** verify privileged CPU instructions, hardware interrupts, or physical MMIO.
 
 ### 4.2 In-Kernel Runtime Self-Tests
 - **Scope**: Executed during early boot sequence before handing off to userland:
+  - Legacy PIC remap & mask verification: `pic.remapAndMask()` remaps 8259 PICs to `0x20–0x2F` and verifies IMRs read back `0xFF`/`0xFF` (`[PIC]` marker).
+  - IDT gate validation: `idt.validateExceptionGates()` verifies `0x8E` (Present, DPL=0, 64-bit Interrupt Gate), current kernel CS, cleared reserved fields, and distinct exception stub addresses across vectors `0..31` (and all 256 gates).
   - IDT self-test: Software interrupt (`int $3`) dispatch and return.
   - Page Fault self-test: Controlled `#PF` test hook validating CR2 linear address and error flags.
   - PMM self-test: Single and multi-page allocation, free, re-allocation, and double-free rejection.

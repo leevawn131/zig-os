@@ -207,9 +207,30 @@ pub fn build(b: *std.Build) void {
     });
     const run_heap_tests = b.addRunArtifact(heap_tests);
 
+    // Interrupt Vector Policy & Static Forbidden-INT Host Tests (F-03)
+    const vector_policy_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/vector_policy_test.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
+    vector_policy_test_mod.addAnonymousImport("vectors", .{
+        .root_source_file = b.path("kernel/src/arch/x86_64/interrupts/vectors.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
+    const vector_policy_opts = b.addOptions();
+    vector_policy_opts.addOptionPathDirectory("kernel_dir", b.path("kernel"));
+    vector_policy_test_mod.addOptions("build_options", vector_policy_opts);
+    const vector_policy_tests = b.addTest(.{
+        .name = "vector_policy_test",
+        .root_module = vector_policy_test_mod,
+    });
+    const run_vector_policy_tests = b.addRunArtifact(vector_policy_tests);
+
     const unit_test_step = b.step("test", "Run host unit tests");
     unit_test_step.dependOn(&run_unit_tests.step);
     unit_test_step.dependOn(&run_pmm_tests.step);
     unit_test_step.dependOn(&run_vmm_tests.step);
     unit_test_step.dependOn(&run_heap_tests.step);
+    unit_test_step.dependOn(&run_vector_policy_tests.step);
 }
