@@ -211,10 +211,28 @@ pub const HeapAllocator = struct {
         var curr = self.head_block;
         while (curr) |block| {
             if (block.is_free and block.magic == MAGIC_FREE and block.canary == CANARY) {
-                const payload_addr = std.math.add(u64, @intFromPtr(block), HEADER_SIZE) catch {
+                const block_addr = @intFromPtr(block);
+                if (block_addr < self.heap_start or block_addr >= self.current_heap_end) {
+                    curr = block.next;
+                    continue;
+                }
+                const payload_addr = std.math.add(u64, block_addr, HEADER_SIZE) catch {
                     curr = block.next;
                     continue;
                 };
+                const block_size_u64 = std.math.cast(u64, block.size) orelse {
+                    curr = block.next;
+                    continue;
+                };
+                const block_end = std.math.add(u64, payload_addr, block_size_u64) catch {
+                    curr = block.next;
+                    continue;
+                };
+                if (block_end > self.current_heap_end) {
+                    curr = block.next;
+                    continue;
+                }
+
                 const aligned_payload = alignUpChecked(payload_addr, align_val_u64) orelse {
                     curr = block.next;
                     continue;
@@ -234,15 +252,67 @@ pub const HeapAllocator = struct {
                 };
 
                 if (block.size >= total_needed) {
-                    // Split block if excess space is sufficient for another header + min chunk
+                    const user_end = std.math.add(u64, aligned_payload, @as(u64, aligned_size)) catch {
+                        curr = block.next;
+                        continue;
+                    };
+                    if (user_end > block_end or user_end > self.current_heap_end) {
+                        curr = block.next;
+                        continue;
+                    }
+
                     const excess = block.size - total_needed;
+                    var split_info: ?struct {
+                        split_addr: u64,
+                        remainder_size: usize,
+                    } = null;
+
+                    // Split block if excess space is sufficient for another header + min chunk
                     if (excess > HEADER_SIZE + 32) {
-                        const split_addr = aligned_payload + @as(u64, aligned_size);
-                        const next_block: *BlockHeader = @ptrFromInt(split_addr);
+                        const split_addr = user_end;
+                        const remainder_size = excess - HEADER_SIZE;
+                        const remainder_u64 = std.math.cast(u64, remainder_size) orelse {
+                            curr = block.next;
+                            continue;
+                        };
+                        const split_header_end = std.math.add(u64, split_addr, HEADER_SIZE) catch {
+                            curr = block.next;
+                            continue;
+                        };
+                        const split_block_end = std.math.add(u64, split_header_end, remainder_u64) catch {
+                            curr = block.next;
+                            continue;
+                        };
+
+                        if (split_addr < self.heap_start or
+                            split_addr >= self.current_heap_end or
+                            split_addr < payload_addr or
+                            split_header_end > block_end or
+                            split_block_end > block_end or
+                            split_block_end > self.current_heap_end)
+                        {
+                            curr = block.next;
+                            continue;
+                        }
+
+                        split_info = .{
+                            .split_addr = split_addr,
+                            .remainder_size = remainder_size,
+                        };
+                    }
+
+                    const allocated_block_size = if (split_info != null) total_needed else block.size;
+                    const new_total_allocated = std.math.add(usize, self.total_allocated_bytes, allocated_block_size) catch {
+                        curr = block.next;
+                        continue;
+                    };
+
+                    if (split_info) |info| {
+                        const next_block: *BlockHeader = @ptrFromInt(info.split_addr);
                         next_block.* = BlockHeader{
                             .magic = MAGIC_FREE,
                             .canary = CANARY,
-                            .size = excess - HEADER_SIZE,
+                            .size = info.remainder_size,
                             .is_free = true,
                             .align_offset = 0,
                             .next = block.next,
@@ -259,7 +329,7 @@ pub const HeapAllocator = struct {
                     block.align_offset = align_offset_u32;
                     block.magic = MAGIC_USED;
                     block.is_free = false;
-                    self.total_allocated_bytes += block.size;
+                    self.total_allocated_bytes = new_total_allocated;
 
                     return @ptrFromInt(aligned_payload);
                 }
@@ -273,9 +343,9 @@ pub const HeapAllocator = struct {
     pub fn allocate(self: *Self, size: usize, alignment: usize) ?[*]u8 {
         if (!self.initialized) return null;
         if (size == 0) return null;
-        if (alignment == 0 or !std.math.isPowerOfTwo(alignment)) return null;
+        if (alignment != 0 and !std.math.isPowerOfTwo(alignment)) return null;
 
-        // Enforce at least 16-byte System V ABI alignment while validating requested alignment
+        // Treat alignment == 0 as default 16-byte System V ABI alignment and enforce minimum 16
         const align_val_usize: usize = @max(alignment, 16);
         const align_val_u64 = std.math.cast(u64, align_val_usize) orelse return null;
         if (align_val_u64 > self.heap_max_size) return null;
@@ -323,8 +393,16 @@ pub const HeapAllocator = struct {
         var found_block: ?*BlockHeader = null;
 
         while (curr) |block| {
-            const payload_start = std.math.add(u64, @intFromPtr(block), HEADER_SIZE) catch return error.CorruptBlockHeader;
-            const payload_end = std.math.add(u64, payload_start, block.size) catch return error.CorruptBlockHeader;
+            const block_addr = @intFromPtr(block);
+            if (block_addr < self.heap_start or block_addr >= self.current_heap_end) {
+                return error.CorruptBlockHeader;
+            }
+            const payload_start = std.math.add(u64, block_addr, HEADER_SIZE) catch return error.CorruptBlockHeader;
+            const block_size_u64 = std.math.cast(u64, block.size) orelse return error.CorruptBlockHeader;
+            const payload_end = std.math.add(u64, payload_start, block_size_u64) catch return error.CorruptBlockHeader;
+            if (payload_end > self.current_heap_end) {
+                return error.CorruptBlockHeader;
+            }
             if (raw_addr >= payload_start and raw_addr < payload_end) {
                 found_block = block;
                 break;
@@ -342,21 +420,23 @@ pub const HeapAllocator = struct {
             return error.DoubleFree;
         }
 
-        const align_offset_usize: usize = @intCast(block.align_offset);
+        const align_offset_usize = std.math.cast(usize, block.align_offset) orelse return error.CorruptBlockHeader;
         if (align_offset_usize > block.size or block.size - align_offset_usize < 16) {
             return error.CorruptBlockHeader;
         }
 
-        const payload_start = @intFromPtr(block) + @as(u64, HEADER_SIZE);
-        const expected_ptr = payload_start + @as(u64, block.align_offset);
+        const payload_start = std.math.add(u64, @intFromPtr(block), HEADER_SIZE) catch return error.CorruptBlockHeader;
+        const expected_ptr = std.math.add(u64, payload_start, @as(u64, block.align_offset)) catch return error.CorruptBlockHeader;
         if (raw_addr != expected_ptr) {
             return error.BlockHeaderNotFound;
         }
 
+        const new_total_freed = std.math.add(usize, self.total_freed_bytes, block.size) catch return error.CorruptBlockHeader;
+
         block.magic = MAGIC_FREE;
         block.is_free = true;
         block.align_offset = 0;
-        self.total_freed_bytes += block.size;
+        self.total_freed_bytes = new_total_freed;
 
         coalesceWithNext(block);
         if (block.prev) |prev_b| {

@@ -189,11 +189,20 @@ pub fn testHeap() bool {
         if (err != error.BlockHeaderNotFound) return false;
     }
 
+    // F-12 Ring 0 compatibility check: alignment == 0 defaults to 16-byte System V alignment
+    const zero_align_ptr = allocate(64, 0) orelse return false;
+    if (@intFromPtr(zero_align_ptr) % 16 != 0) return false;
+    @memset(zero_align_ptr[0..64], 0x55);
+    for (zero_align_ptr[0..64]) |byte| {
+        if (byte != 0x55) return false;
+    }
+    deallocate(zero_align_ptr);
+
     // F-12 Ring 0 regression checks: overflow and invalid alignment must fail without mutation
     const allocated_before_invalid = total_allocated_bytes;
     const end_before_invalid = current_heap_end;
     if (allocate(std.math.maxInt(usize), 16) != null) return false;
-    if (allocate(64, 0) != null) return false;
+    if (allocate(64, 3) != null) return false;
     if (allocate(64, 24) != null) return false;
     if (allocate(64, HEAP_MAX_SIZE * 2) != null) return false;
     if (total_allocated_bytes != allocated_before_invalid) return false;

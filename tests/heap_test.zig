@@ -901,15 +901,24 @@ test "Heap 18: F-11 init validates page count, rejects uninitialized allocations
     try assertListInvariants(&heap);
 }
 
-test "Heap 19: F-12 validates alignment and size overflow without mutating heap state" {
+test "Heap 19: F-12 treats align=0 as 16-byte default and rejects invalid sizes/alignments without mutation" {
     var fake = try FakeHeapBackend.init(testing.allocator, 8);
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
     try heap.init(2);
 
-    // Valid power-of-two alignments (both < 16 and >= 16) succeed with required alignment.
-    const valid_aligns = [_]usize{ 1, 2, 4, 8, 16, 32, 64, 256 };
+    // Explicit F-12 compatibility contract: alignment == 0 behaves as 16-byte System V alignment.
+    const p_zero = heap.allocate(64, 0) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 0), @intFromPtr(p_zero) % 16);
+    @memset(p_zero[0..64], 0x55);
+    for (p_zero[0..64]) |byte| {
+        try testing.expectEqual(@as(u8, 0x55), byte);
+    }
+    try heap.deallocate(p_zero);
+
+    // Valid alignments (0, < 16 powers of two, and >= 16 powers of two) succeed with >= 16-byte alignment.
+    const valid_aligns = [_]usize{ 0, 1, 2, 4, 8, 16, 32, 64, 256 };
     for (valid_aligns) |a| {
         const ptr = heap.allocate(64, a) orelse return error.TestUnexpectedResult;
         try testing.expectEqual(@as(usize, 0), @intFromPtr(ptr) % @max(a, 16));
@@ -923,11 +932,10 @@ test "Heap 19: F-12 validates alignment and size overflow without mutating heap 
     const end_before = heap.current_heap_end;
     const blocks_before = countBlocks(&heap);
 
-    // Invalid size and alignment inputs must fail with zero side effects.
+    // Invalid size and nonzero non-power-of-two / oversized alignment inputs must fail with zero side effects.
     try testing.expect(heap.allocate(0, 16) == null);
     try testing.expect(heap.allocate(std.math.maxInt(usize), 16) == null);
     try testing.expect(heap.allocate(std.math.maxInt(usize) - 7, 16) == null);
-    try testing.expect(heap.allocate(64, 0) == null);
     try testing.expect(heap.allocate(64, 3) == null);
     try testing.expect(heap.allocate(64, 24) == null);
     try testing.expect(heap.allocate(64, @intCast(fake.maxSize() * 2)) == null);
@@ -941,5 +949,85 @@ test "Heap 19: F-12 validates alignment and size overflow without mutating heap 
     try testing.expectEqual(end_before, heap.current_heap_end);
     try testing.expectEqual(blocks_before, countBlocks(&heap));
     try fake.expectUnmappedPoisonedFrom(2);
+    try assertListInvariants(&heap);
+}
+
+test "Heap 20: exact F-11 sequence (init(4), 16320@16, 16336@64) maps 5 additional pages (9 total)" {
+    var fake = try FakeHeapBackend.init(testing.allocator, 16);
+    defer fake.deinit();
+
+    var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+    try heap.init(4);
+    try testing.expectEqual(@as(usize, 4), fake.mapped_pages);
+
+    const p1 = heap.allocate(16320, 16) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 0), @intFromPtr(p1) % 16);
+    try testing.expectEqual(@as(usize, 4), fake.mapped_pages);
+    @memset(p1[0..16320], 0x41);
+
+    const p2 = heap.allocate(16336, 64) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 0), @intFromPtr(p2) % 64);
+    try testing.expectEqual(@as(usize, 9), fake.mapped_pages);
+    try testing.expectEqual(@as(usize, 0), fake.map_failures);
+    try testing.expect(!fake.unexpected_addr);
+    @memset(p2[0..16336], 0x5B);
+
+    for (p1[0..16320]) |byte| {
+        try testing.expectEqual(@as(u8, 0x41), byte);
+    }
+    for (p2[0..16336]) |byte| {
+        try testing.expectEqual(@as(u8, 0x5B), byte);
+    }
+    try fake.expectUnmappedPoisonedFrom(9);
+    try assertListInvariants(&heap);
+
+    try heap.deallocate(p2);
+    try heap.deallocate(p1);
+    try testing.expectEqual(heap.total_allocated_bytes, heap.total_freed_bytes);
+    try testing.expectEqual(@as(usize, 1), countBlocks(&heap));
+    try testing.expectEqual(9 * PAGE_SIZE - HEADER_SIZE, heap.head_block.?.size);
+    try assertListInvariants(&heap);
+}
+
+test "Heap 21: F-12 checked split/range guards prevent mutation on corrupted metadata" {
+    var fake = try FakeHeapBackend.init(testing.allocator, 2);
+    defer fake.deinit();
+
+    var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+    try heap.init(2);
+
+    const p1 = heap.allocate(64, 16) orelse return error.TestUnexpectedResult;
+    const blk0 = try findBlockForPtr(&heap, p1);
+    const free_tail = blk0.next orelse return error.TestUnexpectedResult;
+
+    const saved_tail_size = free_tail.size;
+    const saved_tail_next = free_tail.next;
+    const saved_tail_prev = free_tail.prev;
+    const saved_alloc_bytes = heap.total_allocated_bytes;
+    const saved_freed_bytes = heap.total_freed_bytes;
+
+    // Corrupt free block size beyond mapped heap end (triggers checked range/split bounds guard).
+    free_tail.size = std.math.maxInt(usize) - 64;
+    try testing.expect(heap.allocate(64, 16) == null);
+
+    // Neither links nor accounting counters may mutate on rejected corrupted metadata.
+    try testing.expectEqual(saved_tail_next, free_tail.next);
+    try testing.expectEqual(saved_tail_prev, free_tail.prev);
+    try testing.expectEqual(MAGIC_FREE, free_tail.magic);
+    try testing.expect(free_tail.is_free);
+    try testing.expectEqual(saved_alloc_bytes, heap.total_allocated_bytes);
+    try testing.expectEqual(@as(usize, 2), countBlocks(&heap));
+
+    // Corrupt used block size beyond mapped heap end -> deallocate must reject cleanly without mutation.
+    free_tail.size = saved_tail_size;
+    const saved_blk0_size = blk0.size;
+    blk0.size = @as(usize, PAGE_SIZE) * 10;
+    try testing.expectError(error.CorruptBlockHeader, heap.deallocate(p1));
+    try testing.expectEqual(saved_freed_bytes, heap.total_freed_bytes);
+    try testing.expect(!blk0.is_free);
+    try testing.expectEqual(MAGIC_USED, blk0.magic);
+
+    blk0.size = saved_blk0_size;
+    try heap.deallocate(p1);
     try assertListInvariants(&heap);
 }
