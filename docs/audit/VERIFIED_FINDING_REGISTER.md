@@ -2,7 +2,7 @@
 
 > **Document Authority:** Principal Kernel Auditor & Documentation Architect (Gemini 4 Argon)  
 > **Original Audit Baseline:** `c10c05f1f37aacfda5046480a314f29d940b67ef` (`main`)  
-> **Current Implementation Snapshot:** `b3cf68bbfc659be339b24cf8b3110be7eb159b53` (`main`)
+> **Current Implementation Snapshot:** `c1ef192b336ba548ac0acb5340d92143bdad7994` (`main`)
 > **Audit Date:** 2026-11-11 (Updated: 2026-11-13)  
 > **Scope:** Independent source, build-pipeline, and ELF binary verification for Phase 1 hardening.
 
@@ -21,6 +21,7 @@
 | **v1.5** | 2026-11-12 | Gemini 4 Argon | Updated register for implementation snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` pure-module extraction): (1) recorded current implementation snapshot `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` alongside historical original audit baseline `c10c05f1f37aacfda5046480a314f29d940b67ef`; (2) documented `F-10A` completion (`paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig` shared between production kernel modules and `tests/unit_test.zig`), explicitly distinguishing independently reviewed source structure from agent-reported build (`Debug`/`ReleaseSafe`), host unit test (`7/7` passing), and fresh ISO/QEMU boot evidence; (3) updated `F-10` evidence to replace the obsolete claim that `tests/unit_test.zig` duplicates all helpers with zero production imports, while keeping `F-10` `OPEN` / `VERIFIED` / `P0` because `F-10B` (stateful PMM, VMM, and Heap core testability) remains pending; and (4) preserved `F-14` as `OPEN` / `VERIFIED` / `P0` and retained all finding counts (`16 VERIFIED`, `1 LIKELY`, `1 FIXED`, `9 REJECTED`; `17` active findings; active `P0`: `F-10`, `F-14`). |
 | **v1.6** | 2026-11-13 | Gemini 4 Argon | Independently audited `F-14` implementation at commit `771146810e41854f2b9e754f2a048f142ab633a8` and updated register: (1) inspected `build.zig`, `scripts/build.sh`, `scripts/package-iso.sh`, `scripts/lib/common.sh`, `scripts/lib/provenance.sh`, `scripts/lib/qemu-runner.sh`, `scripts/test-boot.sh`, `scripts/run.sh`, `scripts/debug.sh`, and `tests/test_boot.py` against all nine `F-14` resolution criteria; (2) marked `F-14` as `FIXED` while preserving a strict boundary between independently reviewed source/artifact evidence and implementation-agent-reported build, QEMU smoke-test, and `E.1`–`E.7` regression outputs, and recorded a non-blocking implementation note that `mv -f` from `${TMPDIR:-/tmp}` (`tmpfs`) to `build/zig-os.iso` (`ext4`) performs a cross-filesystem copy-and-unlink when `TMPDIR` is unset; (3) corrected Section 1.1 branch wording (`main` first-parent ancestor on `origin/main` rather than `origin/dev baseline`); (4) retained `F-10` as `VERIFIED` / `OPEN` / `P0` (`F-10B` pending); and (5) reconciled all status (`15 VERIFIED`, `1 LIKELY`, `2 FIXED`, `9 REJECTED`; `16` active findings), severity (`5 HIGH`, `6 MEDIUM`, `3 LOW`, `2 INFORMATIONAL`), and priority (`P0: 1`, `P1: 10`, `P2: 2`, `P3: 3`) tables. |
 | **v1.7** | 2026-11-13 | Gemini 4 Argon | Consolidated audit of `F-10B` Parts 1–3 (`bc2efdb0e673a6086f59e5ad0ca1669216f8c604`, `0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6`, `b3cf68bbfc659be339b24cf8b3110be7eb159b53`) and VMM hardening at HEAD `b3cf68bbfc659be339b24cf8b3110be7eb159b53`: (1) independently audited `physical_core.zig`, `physical.zig`, `virtual_core.zig`, `virtual.zig`, `heap_core.zig`, `heap.zig`, `heap_layout.zig`, `tests/pmm_test.zig`, `tests/vmm_test.zig`, `tests/heap_test.zig`, `tests/unit_test.zig`, and `build.zig`, verifying that all four host test targets (`unit_test` [7], `pmm_test` [10], `vmm_test` [10], `heap_test` [14] = 41 tests) import actual production modules with zero test-side algorithm duplication; (2) marked `F-10` as `FIXED` (`F-10A` + `F-10B` complete); (3) independently audited VMM hardening in `0156e91` and marked `F-09` (1 GiB `PDPTE` and 2 MiB `PDE` `Flags.HUGE` conflict rejection prior to child-table resolution or mutation) and `F-13` (48-bit canonical address validation, 4 KiB virtual/physical alignment checks, and parent `Flags.USER` propagation) as `FIXED`, while explicitly distinguishing Ring 0 QEMU runtime coverage (`vmm.testVmm()`) from host fake-backend coverage (`FakeVmmBackend` for huge-page conflicts and `Flags.USER` parent promotion); (4) verified that `F-06`, `F-11`, and `F-12` in `heap_core.zig` and `F-07`, `F-08`, `F-16`, and `F-17` in `physical_core.zig` remain `VERIFIED` (`OPEN`); and (5) reconciled all status (`12 VERIFIED`, `1 LIKELY`, `5 FIXED`, `9 REJECTED`; `13` active findings), severity (`0 CRITICAL`, `3 HIGH`, `5 MEDIUM`, `3 LOW`, `2 INFORMATIONAL`), and priority (`P0: 0`, `P1: 8`, `P2: 2`, `P3: 3`) tables. |
+| **v1.8** | 2026-11-13 | Gemini 4 Argon | Consolidated PMM hardening audit at HEAD `c1ef192b336ba548ac0acb5340d92143bdad7994` (`fix(mm): harden PMM memory-map and free validation (F-07 F-08 F-16)`): (1) independently audited `kernel/src/mm/physical_core.zig`, `kernel/src/mm/physical.zig`, and `tests/pmm_test.zig` (16 stateful PMM tests; `47/47` total host unit tests across `unit_test` [7], `pmm_test` [16], `vmm_test` [10], and `heap_test` [14]); (2) marked `F-07` (`RegionKind.contributesToHighestAddress()` RAM-backed ceiling calculation, explicit `mapLimineRegionKind()` mapping, and checked arithmetic excluding high MMIO/framebuffer/reserved apertures), `F-08` (6-step `validateFreePage()` enforcing `< 1 MiB` `ReservedAddress`, page-rounded `BitmapOverlap`, and `.usable` `NotUsableRegion`, two-pass atomic `freePages()`, exhaustive `panicOnFreeError()`, value-stored `RegionSource` union, and module-static `limine_region_ctx`), and `F-16` (`>= 1 MiB` page-aligned bitmap placement, page-rounded backing fit, non-usable overlap rejection, and full `[bitmap_phys, bitmap_end_phys)` frame reservation) as `FIXED` (concurring with independent review by ChatGPT); (3) maintained strict provenance separation between independent source audit, agent-reported 4-mode host tests (`47/47`), 4-mode kernel builds, `F-01` disassembly (`0` matches), `Debug`/`ReleaseSafe` QEMU smoke tests, and host-only synthetic memory-map cases (64 TiB MMIO exclusion and `freePages()` failure-atomicity); (4) preserved `F-03`, `F-04`, `F-06`, `F-11`, `F-12`, `F-15`, `F-17`, `F-18`, `F-19`, and `F-20` as `OPEN`; and (5) reconciled all status (`9 VERIFIED`, `1 LIKELY`, `8 FIXED`, `9 REJECTED`; `10` active findings), severity (`0 CRITICAL`, `1 HIGH`, `5 MEDIUM`, `2 LOW`, `2 INFORMATIONAL`), and priority (`P0: 0`, `P1: 6`, `P2: 1`, `P3: 3`) tables. |
 
 ---
 
@@ -28,38 +29,45 @@
 
 ### 1.1 Git Snapshot Identity
 
-| Attribute | Original Audit Baseline (`v1.0`–`v1.3.1`) | Current Implementation Snapshot (`v1.7`) | Match Status |
+| Attribute | Original Audit Baseline (`v1.0`–`v1.3.1`) | Current Implementation Snapshot (`v1.8`) | Match Status |
 |---|---|---|---|
 | **Repository** | `leevawn131/zig-os` | `leevawn131/zig-os` | **MATCH** |
 | **Branch** | `main` (`origin/main` first-parent ancestor; `origin/dev` ref also points to `c10c05f1`) | `main` (`origin/main`) | **MATCH** |
-| **HEAD Commit SHA** | `c10c05f1f37aacfda5046480a314f29d940b67ef` | `b3cf68bbfc659be339b24cf8b3110be7eb159b53` | **EXACT MATCH** |
-| **Commit Subject** | `feat(kernel): implement Phase 1 core kernel infrastructure` | `test(mm): extract host-testable stateful heap core (F-10B Part 3)` | **EXACT MATCH** |
-| **Commit Timestamp** | `2026-11-10T14:10:11+07:00` | `2026-11-13T07:38:37+07:00` | **EXACT MATCH** |
-| **Intervening Source Commits** | — | `515aa91becaf772f3f5b9243f92c1c0828f5d0bc` (`F-01` fix), `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` pure modules), `771146810e41854f2b9e754f2a048f142ab633a8` (`F-14` fix), `bc2efdb0e673a6086f59e5ad0ca1669216f8c604` (`F-10B` Part 1 PMM), `0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6` (`F-10B` Part 2 VMM + `F-09`/`F-13`), `b3cf68bbfc659be339b24cf8b3110be7eb159b53` (`F-10B` Part 3 Heap) | **VERIFIED** |
+| **HEAD Commit SHA** | `c10c05f1f37aacfda5046480a314f29d940b67ef` | `c1ef192b336ba548ac0acb5340d92143bdad7994` | **EXACT MATCH** |
+| **Commit Subject** | `feat(kernel): implement Phase 1 core kernel infrastructure` | `fix(mm): harden PMM memory-map and free validation (F-07 F-08 F-16)` | **EXACT MATCH** |
+| **Commit Timestamp** | `2026-11-10T14:10:11+07:00` | `2026-11-13T08:46:29+07:00` | **EXACT MATCH** |
+| **Intervening Source Commits** | — | `515aa91becaf772f3f5b9243f92c1c0828f5d0bc` (`F-01` fix), `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6` (`F-10A` pure modules), `771146810e41854f2b9e754f2a048f142ab633a8` (`F-14` fix), `bc2efdb0e673a6086f59e5ad0ca1669216f8c604` (`F-10B` Part 1 PMM), `0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6` (`F-10B` Part 2 VMM + `F-09`/`F-13`), `b3cf68bbfc659be339b24cf8b3110be7eb159b53` (`F-10B` Part 3 Heap), `c1ef192b336ba548ac0acb5340d92143bdad7994` (`F-07`/`F-08`/`F-16` PMM hardening) | **VERIFIED** |
 
 ### 1.2 Working Tree & Build Artifact Status (`git status --short`)
 
-At current snapshot `b3cf68bbfc659be339b24cf8b3110be7eb159b53`:
+At current snapshot `c1ef192b336ba548ac0acb5340d92143bdad7994`:
 ```text
  M zig.zip
 ?? docs/md.zip
 ?? graphify-out/
 ```
 
-- **Kernel, Linker, Build, and Test Source Integrity (`b3cf68b`):** Zero tracked source files under [`kernel/`](file:///home/leevawn/Projects/zig-os/kernel), [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/`](file:///home/leevawn/Projects/zig-os/scripts), or [`tests/`](file:///home/leevawn/Projects/zig-os/tests) have uncommitted modifications. All tracked code, build definitions, scripts, and tests match commit `b3cf68bbfc659be339b24cf8b3110be7eb159b53` byte-for-byte.
+- **Kernel, Linker, Build, and Test Source Integrity (`c1ef192`):** Zero tracked source files under [`kernel/`](file:///home/leevawn/Projects/zig-os/kernel), [`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig), [`scripts/`](file:///home/leevawn/Projects/zig-os/scripts), or [`tests/`](file:///home/leevawn/Projects/zig-os/tests) have uncommitted modifications. All tracked code, build definitions, scripts, and tests match commit `c1ef192b336ba548ac0acb5340d92143bdad7994` byte-for-byte (`c1ef192` modified only `kernel/src/mm/physical_core.zig`, `kernel/src/mm/physical.zig`, and `tests/pmm_test.zig`).
 - **Untouched Working-Tree Artifacts:** `zig.zip`, `docs/md.zip`, and `graphify-out/` remain untouched in the local workspace per governance safety rules (causing `git status --porcelain` in `scripts/lib/common.sh` to report `tree=dirty` during local builds).
-- **On-Disk Build Artifacts at `b3cf68b` (Independently Inspected via `sha256sum`; `Debug` Kernel ELF/ISO from Final `zig build -Doptimize=Debug test-boot` Run):**
+- **On-Disk Build Artifacts at `c1ef192` (Independently Inspected via `sha256sum`; `ReleaseSafe` Kernel ELF/ISO from Final `python3 tests/test_boot.py --optimize ReleaseSafe` Run):**
   ```text
-  beb50ec40adbf0f5376b5c9777736eb16027a0dfb4ef38d5e32ca5e9a9d86471  zig-out/bin/kernel.elf
-  beb50ec40adbf0f5376b5c9777736eb16027a0dfb4ef38d5e32ca5e9a9d86471  build/iso_root/boot/kernel.elf
-  af681f65bbc6eccd68e9bacefa9b6d59f927728e937c58bc9c4b70c8e965260d  build/zig-os.iso
+  8a3184185b09f97970764cbd722eed42e8e21aafb9292434adee39d8e8ab064f  zig-out/bin/kernel.elf
+  8a3184185b09f97970764cbd722eed42e8e21aafb9292434adee39d8e8ab064f  build/iso_root/boot/kernel.elf
+  a5b1a9ccc0fb0fdf964bbf6d8a70be07a7d8b47b06786c7538138d1e65bd1948  build/zig-os.iso
   ```
-- **Agent-Reported Kernel ELF Artifacts at `b3cf68b` Across Optimization Modes (`F-10B` Part 3):**
+- **Agent-Reported `Debug` Build Artifacts at `c1ef192` (`bash scripts/test-boot.sh --optimize Debug`):**
+  ```text
+  539f0998886c12b990e9af57b10862fe9f6f811ee2e0f93667ebf44bba45de09  zig-out/bin/kernel.elf (Debug)
+  539f0998886c12b990e9af57b10862fe9f6f811ee2e0f93667ebf44bba45de09  build/iso_root/boot/kernel.elf (Debug)
+  09f882ef9a6ceee505cb9b977fa55664b623aa615fcc24bcd9abde0840c4d2f7  build/zig-os.iso (Debug)
+  ```
+- **Historical Build Artifacts Inspected at `b3cf68b` (`v1.7`, `F-10B` Part 3):**
   ```text
   beb50ec40adbf0f5376b5c9777736eb16027a0dfb4ef38d5e32ca5e9a9d86471  zig-out/bin/kernel.elf (Debug)
   169982e35631ee32f94faf9df45ac68065efc7611c3bf8222a146b73933bb532  zig-out/bin/kernel.elf (ReleaseSafe)
   93ae4d560ba09feac47ff5163a457151512fecc3f2f2e02144022797b6cb79ca  zig-out/bin/kernel.elf (ReleaseFast)
   fe45f8395266259aa1209d641e8565f18817288901e898f4c740f54de7d6f5d2  zig-out/bin/kernel.elf (ReleaseSmall)
+  af681f65bbc6eccd68e9bacefa9b6d59f927728e937c58bc9c4b70c8e965260d  build/zig-os.iso (Debug)
   ```
 - **On-Disk Build Artifacts Inspected at `7711468` (`v1.6`, `ReleaseSafe` Default Build):**
   ```text
@@ -89,10 +97,10 @@ Every claim in this register is classified strictly by the verification method a
 
 | Verification Tier | Executed / Provenance | Command / Method | Empirical Result & Provenance |
 |---|---|---|---|
-| **Static Source Inspection (`c10c05f` through `b3cf68b`)** | **YES (Independently Audited)** | Direct line-by-line review of all files in `kernel/`, `build.zig`, `scripts/`, `tests/`, `docs/`, and `/opt/zig/current/lib/std/Target/x86.zig` | Completed across 100% of kernel and build sources at baseline `c10c05f1`, re-verified at `9df21f8b` (`F-10A` shared pure modules `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, `heap_layout.zig`), audited at `77114681` across all 10 `F-14` build/script/test files, and independently audited at `b3cf68bbfc659be339b24cf8b3110be7eb159b53` across commits `bc2efdb0` (`F-10B` Part 1 PMM: `physical_core.zig`, `physical.zig`, `tests/pmm_test.zig`), `0156e910` (`F-10B` Part 2 VMM + `F-09`/`F-13`: `virtual_core.zig`, `virtual.zig`, `tests/vmm_test.zig`), and `b3cf68bb` (`F-10B` Part 3 Heap: `heap_core.zig`, `heap.zig`, `tests/heap_test.zig`, `build.zig`). |
-| **ELF & ISO Binary Inspection (`c10c05f`, `515aa91`, `7711468`, & `b3cf68b`)** | **YES (Baseline & On-Disk Hashes Audited / `F-01` Disassembly Agent-Reported)** | `sha256sum`, `xorriso -extract`, `readelf -h -l -S -d`, `nm -n`, `objdump -d -M intel`, `df -T` | At `c10c05f`, confirmed `/boot/kernel.elf` inside `build/zig-os.iso` matched `zig-out/bin/kernel.elf` (`19e69d10...`), 3 `PT_LOAD` segments (`R E`, `R`, `RW`), orphan `.got` section, Limine request ordering, and 6,904 `xmm` / 2,274 `movaps` instructions. At `515aa91` (`F-01`) and `b3cf68b` (`F-10B` Part 3), implementation agents reported `0` prohibited SIMD/x87 instructions in `kernel.elf`. At `b3cf68b`, auditor verified on-disk `zig-out/bin/kernel.elf` and `build/iso_root/boot/kernel.elf` SHA-256 (`beb50ec40adbf0f5376b5c9777736eb16027a0dfb4ef38d5e32ca5e9a9d86471`). |
-| **Host Unit Tests (`c10c05f` vs. `b3cf68b`)** | **Baseline Audited / `b3cf68b` Source Audited & Execution Agent-Reported** | `zig build test --summary all` across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall` | At `c10c05f`, `5/5` tests passed against local duplicate functions in `tests/unit_test.zig`. At `b3cf68b`, independent source review confirms `zig build test` wires four host test targets importing production modules with zero duplicate algorithms: `unit_test` (`tests/unit_test.zig`, 7 pure tests), `pmm_test` (`tests/pmm_test.zig` importing `physical_core.zig`, 10 stateful PMM tests), `vmm_test` (`tests/vmm_test.zig` importing `virtual_core.zig`, 10 stateful VMM tests including `F-09` and `F-13`), and `heap_test` (`tests/heap_test.zig` importing `heap_core.zig`, 14 stateful Heap tests). Implementation agent reported `41/41` host tests passing uncached across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`. |
-| **Build, Provenance, & QEMU Boot Verification (`c10c05f` vs. `7711468` & `b3cf68b`)** | **Baseline Audited / `7711468` & `b3cf68b` Source Audited & Execution Agent-Reported** | `zig build -Doptimize=<mode>`, `zig build -Doptimize=<mode> iso`, `./scripts/test-boot.sh`, `python3 tests/test_boot.py`, `zig build -Doptimize=Debug test-boot` | At `b3cf68b`, implementation agent reported clean kernel compilation across all 4 optimization modes (`Debug`, `ReleaseSafe`, `ReleaseFast`, `ReleaseSmall`), passing `Debug` (`beb50ec4...`) and `ReleaseSafe` (`169982e3...`) ISO builds with 3-way SHA-256 provenance verification, and passing QEMU headless smoke tests (`./scripts/test-boot.sh`, `python3 tests/test_boot.py`, and `zig build -Doptimize=Debug test-boot --summary all`). Note that in-kernel QEMU boot tests (`pmm.testPmm()`, `vmm.testVmm()`, `heap.testHeap()`) exercise Ring 0 4 KiB page mapping/unmapping, canonical/alignment rejection, frame allocation, and heap allocation, whereas 1 GiB/2 MiB huge-page conflict protection (`F-09`) and `Flags.USER` parent-entry promotion (`F-13`) are verified via host-side fake-backend unit tests (`tests/vmm_test.zig`), not Ring 3 QEMU tests. |
+| **Static Source Inspection (`c10c05f` through `c1ef192`)** | **YES (Independently Audited by Argon & Reviewed by ChatGPT)** | Direct line-by-line review of all files in `kernel/`, `build.zig`, `scripts/`, `tests/`, `docs/`, and `/opt/zig/current/lib/std/Target/x86.zig` | Completed across 100% of kernel and build sources at baseline `c10c05f1`, re-verified at `9df21f8b` (`F-10A`), `77114681` (`F-14`), `bc2efdb0`/`0156e910`/`b3cf68bb` (`F-10B` Parts 1–3 + `F-09`/`F-13`), and independently audited at `c1ef192b336ba548ac0acb5340d92143bdad7994` across `kernel/src/mm/physical_core.zig`, `kernel/src/mm/physical.zig`, and `tests/pmm_test.zig` (`F-07`, `F-08`, `F-16`, plus `RegionSource` and `limine_region_ctx` lifetime safety). Independent technical review by ChatGPT also reported PASS for `F-07`/`F-08`/`F-16`. |
+| **ELF & ISO Binary Inspection (`c10c05f`, `515aa91`, `7711468`, `b3cf68b`, & `c1ef192`)** | **YES (Baseline & On-Disk Hashes Audited / `F-01` Disassembly Agent-Reported)** | `sha256sum`, `xorriso -extract`, `readelf -h -l -S -d`, `nm -n`, `objdump -d -M intel`, `df -T` | At `c10c05f`, confirmed `/boot/kernel.elf` inside `build/zig-os.iso` matched `zig-out/bin/kernel.elf` (`19e69d10...`), 3 `PT_LOAD` segments (`R E`, `R`, `RW`), orphan `.got` section, Limine request ordering, and 6,904 `xmm` / 2,274 `movaps` instructions. At `515aa91` (`F-01`), `b3cf68b` (`F-10B` Part 3), and `c1ef192` (`F-07`/`F-08`/`F-16` across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`), implementation agents reported `0` prohibited SIMD/x87 instructions in `kernel.elf`. At `c1ef192`, auditor verified on-disk `zig-out/bin/kernel.elf` and `build/iso_root/boot/kernel.elf` SHA-256 (`8a3184185b09f97970764cbd722eed42e8e21aafb9292434adee39d8e8ab064f`) and `build/zig-os.iso` SHA-256 (`a5b1a9ccc0fb0fdf964bbf6d8a70be07a7d8b47b06786c7538138d1e65bd1948`). |
+| **Host Unit Tests (`c10c05f` vs. `b3cf68b` & `c1ef192`)** | **Baseline Audited / `c1ef192` Source Audited & Execution Agent-Reported** | `zig build test -Doptimize=<mode> --cache-dir <tmp> --summary all` across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall` | At `c10c05f`, `5/5` tests passed against local duplicate functions in `tests/unit_test.zig`. At `c1ef192`, independent source review confirms `zig build test` wires four host test targets importing production modules with zero duplicate algorithms: `unit_test` (`tests/unit_test.zig`, 7 pure tests), `pmm_test` (`tests/pmm_test.zig` importing `physical_core.zig`, 16 stateful PMM tests including 6 `F-07`/`F-08`/`F-16`/lifetime regression tests), `vmm_test` (`tests/vmm_test.zig` importing `virtual_core.zig`, 10 stateful VMM tests including `F-09` and `F-13`), and `heap_test` (`tests/heap_test.zig` importing `heap_core.zig`, 14 stateful Heap tests). Implementation agent (Hydrogen) reported `47/47` host tests passing uncached across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`. |
+| **Build, Provenance, & QEMU Boot Verification (`c10c05f` vs. `7711468`, `b3cf68b`, & `c1ef192`)** | **Baseline Audited / `c1ef192` Source Audited & Execution Agent-Reported** | `zig build -Doptimize=<mode>`, `bash scripts/test-boot.sh --optimize Debug`, `python3 tests/test_boot.py --optimize ReleaseSafe` | At `c1ef192`, implementation agent (Hydrogen) reported clean kernel compilation across all 4 optimization modes (`Debug`, `ReleaseSafe`, `ReleaseFast`, `ReleaseSmall`), passing `Debug` (`539f0998...`) and `ReleaseSafe` (`8a318418...`) ISO builds with 3-way SHA-256 provenance verification, and passing QEMU headless smoke tests to `zig-os:~$`. **Provenance & Environment Boundary:** In-kernel QEMU boot tests (`pmm.testPmm()`, `vmm.testVmm()`, `heap.testHeap()`) exercise live Limine Ring 0 `bitmap_phys >= 0x100000` placement, `core.freePage(0x0)` (`ReservedAddress`), `core.freePage(bitmap_phys)` / `core.freePage(bitmap_end_phys - PAGE_SIZE)` (`BitmapOverlap`), tracked non-usable Limine frame `>= 1 MiB` (`NotUsableRegion`), 4 KiB page mapping/unmapping, canonical/alignment rejection, frame allocation, and heap allocation; however, synthetic 64 TiB `.reserved` MMIO ceiling exclusion (`F-07`), `freePages()` failure-atomicity across synthetic boundary spans (`F-08`), multi-candidate `< 1 MiB`/multi-page bitmap fallback matrices (`F-16`), 1 GiB/2 MiB huge-page conflict protection (`F-09`), and `Flags.USER` parent-entry promotion (`F-13`) are verified via host-side unit tests (`tests/pmm_test.zig` and `tests/vmm_test.zig`), not under QEMU. |
 
 ---
 
@@ -102,36 +110,36 @@ Every claim in this register is classified strictly by the verification method a
 
 | Status Category | Count | Finding IDs |
 |---|---:|---|
-| **VERIFIED** | **12** | `F-03`, `F-04`, `F-06`, `F-07`, `F-08`, `F-11`, `F-12`, `F-15`, `F-16`, `F-17`, `F-18`, `F-20` |
+| **VERIFIED** | **9** | `F-03`, `F-04`, `F-06`, `F-11`, `F-12`, `F-15`, `F-17`, `F-18`, `F-20` |
 | **LIKELY** | **1** | `F-19` |
 | **NEEDS_RUNTIME_VERIFICATION** | **0** | None |
 | **REJECTED** | **9** | `R-01`, `R-02`, `R-03`, `R-04`, `R-05`, `R-06`, `R-07`, `R-08` (formerly `F-05`), `R-09` (formerly `F-02`) |
-| **FIXED** | **5** | `F-01` (at `515aa91`: `cpu_features_sub`/`cpu_features_add` in `build.zig`), `F-09` (at `0156e91`: 1 GiB/2 MiB `Flags.HUGE` conflict checks in `virtual_core.zig`), `F-10` (across `9df21f8`, `bc2efdb`, `0156e91`, `b3cf68b`: `F-10A` pure modules + `F-10B` stateful PMM, VMM, and Heap cores wired into `zig build test`), `F-13` (at `0156e91`: 48-bit canonicality, 4 KiB alignment, and parent `Flags.USER` propagation in `virtual_core.zig`), `F-14` (at `7711468`: unconditional fresh build, non-recursive graph, `ReleaseSafe` default, and 3-way ELF SHA-256 provenance verification) |
+| **FIXED** | **8** | `F-01` (at `515aa91`: `cpu_features_sub`/`cpu_features_add` in `build.zig`), `F-07` (at `c1ef192`: RAM-backed `RegionKind.contributesToHighestAddress()` ceiling calculation in `physical_core.zig`), `F-08` (at `c1ef192`: `< 1 MiB`, page-rounded bitmap, and `.usable` validation in `freePage()`/atomic `freePages()`, value-stored `RegionSource`, and static `limine_region_ctx`), `F-09` (at `0156e91`: 1 GiB/2 MiB `Flags.HUGE` conflict checks in `virtual_core.zig`), `F-10` (across `9df21f8`, `bc2efdb`, `0156e91`, `b3cf68b`: `F-10A` pure modules + `F-10B` stateful PMM, VMM, and Heap cores wired into `zig build test`), `F-13` (at `0156e91`: 48-bit canonicality, 4 KiB alignment, and parent `Flags.USER` propagation in `virtual_core.zig`), `F-14` (at `7711468`: unconditional fresh build, non-recursive graph, `ReleaseSafe` default, and 3-way ELF SHA-256 provenance verification), `F-16` (at `c1ef192`: `>= 1 MiB` page-aligned bitmap placement, page-rounded fit, and full backing-page reservation in `physical_core.zig`) |
 
-### 3.2 Severity Distribution (Active Findings: 13 Total)
+### 3.2 Severity Distribution (Active Findings: 10 Total)
 
 | Severity | Count | Finding IDs |
 |---|---:|---|
 | **CRITICAL** | **0** | None |
-| **HIGH** | **3** | `F-06`, `F-07`, `F-08` |
+| **HIGH** | **1** | `F-06` |
 | **MEDIUM** | **5** | `F-03`, `F-04`, `F-11`, `F-12`, `F-15` |
-| **LOW** | **3** | `F-16`, `F-18`, `F-19` |
+| **LOW** | **2** | `F-18`, `F-19` |
 | **INFORMATIONAL** | **2** | `F-17`, `F-20` |
 
-### 3.3 Priority Distribution (`P0`–`P3`: 13 Active Findings)
+### 3.3 Priority Distribution (`P0`–`P3`: 10 Active Findings)
 
 | Priority | Count | Finding IDs |
 |---|---:|---|
 | **P0 — Must fix before further kernel development** | **0** | None (`F-01`, `F-10`, and `F-14` are `FIXED`) |
-| **P1 — Must fix before Phase 2 authorization** | **8** | `F-03`, `F-04`, `F-06`, `F-07`, `F-08`, `F-11`, `F-12`, `F-15` (`F-09` and `F-13` are `FIXED`) |
-| **P2 — Important hardening that can follow** | **2** | `F-16`, `F-19` |
+| **P1 — Must fix before Phase 2 authorization** | **6** | `F-03`, `F-04`, `F-06`, `F-11`, `F-12`, `F-15` (`F-07`, `F-08`, `F-09`, and `F-13` are `FIXED`) |
+| **P2 — Important hardening that can follow** | **1** | `F-19` (`F-16` is `FIXED`) |
 | **P3 — Future improvements** | **3** | `F-17`, `F-18`, `F-20` |
 
 ---
 
 ## 4. Finding Register (`F-01`–`F-20`)
 
-> **Source Version Note:** Findings were originally audited at baseline commit `c10c05f1f37aacfda5046480a314f29d940b67ef` (`2026-11-10`) and updated through current implementation snapshot `b3cf68bbfc659be339b24cf8b3110be7eb159b53` (`2026-11-13`, incorporating `515aa91` for `F-01`, `9df21f8` for `F-10A`, `7711468` for `F-14`, `bc2efdb` for `F-10B` Part 1 PMM, `0156e91` for `F-10B` Part 2 VMM + `F-09`/`F-13`, and `b3cf68b` for `F-10B` Part 3 Heap). Historical IDs `F-02` and `F-05` are retained in place with `Status: REJECTED` and cross-referenced to `R-09` and `R-08` in Section 5 to preserve full audit traceability.
+> **Source Version Note:** Findings were originally audited at baseline commit `c10c05f1f37aacfda5046480a314f29d940b67ef` (`2026-11-10`) and updated through current implementation snapshot `c1ef192b336ba548ac0acb5340d92143bdad7994` (`2026-11-13`, incorporating `515aa91` for `F-01`, `9df21f8` for `F-10A`, `7711468` for `F-14`, `bc2efdb` for `F-10B` Part 1 PMM, `0156e91` for `F-10B` Part 2 VMM + `F-09`/`F-13`, `b3cf68b` for `F-10B` Part 3 Heap, and `c1ef192` for PMM hardening `F-07`/`F-08`/`F-16`). Historical IDs `F-02` and `F-05` are retained in place with `Status: REJECTED` and cross-referenced to `R-09` and `R-08` in Section 5 to preserve full audit traceability.
 
 ---
 
@@ -441,115 +449,93 @@ Host test harness provided by completed `F-10` (`F-10B` Part 3).
 
 ### [F-07] PMM `highest_address` and bitmap size are computed across all memory map entries including reserved and MMIO regions
 
-**Status:** VERIFIED
+**Status:** FIXED (Independently Source-Audited at `c1ef192b336ba548ac0acb5340d92143bdad7994` & Reviewed by ChatGPT; Host Production-Core Regression Tests `F-07` Agent-Reported Passing; 64 TiB Synthetic MMIO Exclusion Verified in Host Unit Tests Only, Live Limine Map Exercised in QEMU `pmm.testPmm()`)
 
-**Severity:** HIGH
+**Severity:** HIGH (Resolved)
 
 **Confidence:** HIGH
 
 **Affected component:**  
-Physical Memory Manager core ([`kernel/src/mm/physical_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig)) and kernel adapter ([`kernel/src/mm/physical.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig)).
+Physical Memory Manager core ([`kernel/src/mm/physical_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig)), kernel PMM adapter ([`kernel/src/mm/physical.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig)), and PMM host test suite ([`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig)).
 
 **Source location:**  
-- [`kernel/src/mm/physical_core.zig:143-156`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L143-L156)
-- [`kernel/src/mm/physical.zig:44-52, 80-110`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L44-L52)
+- [`kernel/src/mm/physical_core.zig:12-49`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L12-L49), [`kernel/src/mm/physical_core.zig:159-161`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L159-L161), and [`kernel/src/mm/physical_core.zig:251-274`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L251-L274)
+- [`kernel/src/mm/physical_core.zig:329-386`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L329-L386)
+- [`kernel/src/mm/physical.zig:51-79`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L51-L79)
+- [`tests/pmm_test.zig:617-733`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L617-L733)
 
-**Evidence:**  
-In [`PhysicalAllocator.init()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L143-L156) (extracted in `bc2efdb`):
-```zig
-// Preserve full-map scan across all region types to determine total tracked frame count.
-var computed_highest: u64 = 0;
-for (0..region_count) |i| {
-    const region = regions.get(i);
-    const region_top = region.base + region.length;
-    if (region_top > computed_highest) {
-        computed_highest = region_top;
-    }
-}
+**Resolution & Independent Audit Evaluation (v1.8, Commit `c1ef192b336ba548ac0acb5340d92143bdad7994`):**
+1. **Independently Reviewed Source Evidence:**
+   - **Explicit Memory-Map Classification (`physical_core.zig:12-49`, `physical.zig:51-64`):**
+     - [`RegionKind`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L13-L24) defines ten explicit hardware-independent variants: `.usable`, `.bootloader_reclaimable`, `.acpi_reclaimable`, `.executable_and_modules`, `.reserved`, `.acpi_nvs`, `.bad_memory`, `.framebuffer`, `.reserved_mapped`, and `.unknown`.
+     - [`RegionKind.contributesToHighestAddress()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L28-L43) returns `true` exclusively for RAM-backed region types (`.usable`, `.bootloader_reclaimable`, `.acpi_reclaimable`, `.executable_and_modules`) and `false` for all non-RAM apertures (`.reserved`, `.acpi_nvs`, `.bad_memory`, `.framebuffer`, `.reserved_mapped`, `.unknown`).
+     - [`RegionKind.isUsable()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L46-L48) returns `true` exclusively for `.usable`.
+     - [`mapLimineRegionKind()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L51-L64) maps every `limine.MemmapType` variant explicitly and maps unknown firmware values (`_`) to `.unknown`.
+   - **Checked Ceiling Calculation & Non-Usable Reservation (`physical_core.zig:251-274, 329-386`):**
+     - In [`initWithSource()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L253-L263), `computed_highest` is accumulated only across entries where `region.kind.contributesToHighestAddress()` is `true` and `region.length > 0`, using checked addition (`std.math.add(u64, region.base, region.length) catch return error.NoUsableBitmapRegion`) and `bytesToPageCountCeil` + `std.math.cast(usize, total_pages_u64)`.
+     - All bitmap bits default to `0xFF` (`USED`, `line 329`), only whole frames `>= LOW_MEMORY_LIMIT` (`0x100000`) inside `.usable` regions are cleared (`lines 331-358`), and a second pass (`lines 360-386`) defensively re-marks any frame overlapping a non-usable region as `USED`. Thus `.bootloader_reclaimable`, `.acpi_reclaimable`, and `.executable_and_modules` contribute to `highest_address` without ever becoming allocatable or freeable.
+2. **Regression Test & Provenance Boundary (Host Fake-Backend vs. QEMU Runtime):**
+   - **Independently Audited Host Regression Tests ([`tests/pmm_test.zig:617-733`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L617-L733)):**
+     - `"F-07: high reserved, framebuffer, acpi_nvs, bad_memory, reserved_mapped, and unknown apertures do not inflate ceiling"` (`lines 617-669`): Verifies that 256 MiB `.usable` RAM (`[0x100000, 0x10100000)` and exact `[0x100000, 0x10000000)`) paired with high `.unknown` (`4 GiB`), `.reserved_mapped` (`8 GiB`), `.bad_memory` (`16 GiB`), `.acpi_nvs` (`32 GiB`), `.framebuffer` (`64 GiB` / `512 GiB`), and `.reserved` (`0x4000_0000_0000` = `64 TiB`) produces `highest_address = 0x10100000` (`total_pages = 65,792`, `bitmap.len = 8,224`) and `highest_address = 0x10000000` (`total_pages = 65,536`, `bitmap.len = 8,192`), with `freePage(0x4000_0000_0000)` returning `error.OutOfBounds`.
+     - `"F-07: RAM-backed reclaimable/kernel types raise ceiling while all non-usable entries remain unallocatable"` (`lines 671-733`): Verifies `.bootloader_reclaimable`, `.acpi_reclaimable`, and `.executable_and_modules` raise `highest_address` to `0x114000` while `.reserved` at `0x2000_0000` is ignored, and draining all free pages via `allocPage()` yields only the 5 `.usable` frames.
+   - **Coverage Boundary:** The 64 TiB `.reserved` MMIO aperture and synthetic multi-region permutations are verified in host unit tests (`tests/pmm_test.zig`, reported passing across all 4 optimization modes); the QEMU boot tests (`Debug` and `ReleaseSafe`) exercise the live Limine memory map via `pmm.init()` and `pmm.testPmm()`.
 
-const computed_total_pages = physical_math.totalPagesFromBytes(computed_highest);
-const computed_bitmap_size = physical_math.bitmapSizeBytes(computed_total_pages);
-```
-
-**Technical explanation:**  
-`computed_highest` (`highest_address`) is computed across **all** memory map regions regardless of `region.kind` (`.usable` and `.non_usable`, which [`limineRegionGet()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L44-L52) maps from `.reserved`, `.framebuffer`, `.acpi_nvs`, etc.). *(Note: the unused `total_usable_bytes` local variable present at `c10c05f` was removed when `physical_core.zig` was extracted in `bc2efdb`, while the full-map `computed_highest` scan was intentionally preserved for `F-10B` Part 1 behavioral parity.)* Because x86_64 memory maps include `.reserved` firmware ROM / APIC MMIO regions up to `4 GiB` (`0x1_0000_0000`) and, on systems with 64-bit PCIe BARs, `.reserved` apertures at multi-terabyte physical addresses (e.g., `1 TiB`..`64 TiB`), sizing the flat bitmap to `highest_address` wastes RAM across non-RAM MMIO holes and will fail to find a contiguous `.usable` region large enough to hold `bitmap_size_bytes` on systems with high 64-bit MMIO entries, returning `error.NoUsableBitmapRegion` (`physical_core.zig:168`) and panicking at `physical.zig:105`.
-
-**Reproduction scenario:**  
-With 256 MiB of `.usable` RAM (`8,192` B bitmap needed) and a standard `4 GiB` `.reserved` top entry, `bitmap_size_bytes` is inflated 16x to `131,072` B (`128 KiB`). With a `.reserved` 64-bit PCIe aperture at `16 TiB` (`0x1000_0000_0000`), `bitmap_size_bytes` becomes `512 MiB` (`> 256 MiB` total RAM), causing `pmm.init()` to panic at `physical.zig:105`.
-
-**Impact:**  
-16x bitmap bloat on standard 256 MiB QEMU and immediate boot panic on hardware/VMs with high 64-bit PCIe MMIO apertures.
-
-**Recommended correction:**  
-Compute `highest_address` only across RAM-backed memory map types (`.usable`, `.bootloader_reclaimable`, `.acpi_reclaimable`, `.executable_and_modules`), excluding `.reserved`, `.framebuffer`, `.acpi_nvs`, and `.bad_memory` apertures.
-
-**Regression tests:**  
-1. Host unit test in [`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig) passing a memory map with 256 MiB `.usable` RAM and a `.reserved` entry at `0x4000_0000_0000` (`64 TiB`), asserting `total_pages` and `bitmap.len` reflect the RAM ceiling rather than the 64 TiB MMIO hole.
+**Historical Evidence (Baseline `c10c05f1` through `b3cf68bb`):**
+Prior to `c1ef192b`, `PhysicalAllocator.init()` computed `computed_highest` across all memory-map entries regardless of `region.kind` (`.usable` and `.non_usable`), inflating the bitmap across high `.reserved` MMIO holes.
 
 **Dependencies:**  
-Related to `F-08` and `F-16`; host test harness provided by completed `F-10` (`F-10B` Part 1).
+Related to `F-08`, `F-10` (`F-10B` Part 1), and `F-16`.
 
 ---
 
 ### [F-08] PMM `freePage()` lacks allocatable-RAM range, reserved-region, and bitmap-overlap validation
 
-**Status:** VERIFIED
+**Status:** FIXED (Independently Source-Audited at `c1ef192b336ba548ac0acb5340d92143bdad7994` & Reviewed by ChatGPT; Host Production-Core Regression Tests `F-08` & Lifetime Tests Agent-Reported Passing; Live Ring 0 `pmm.testPmm()` Exercises `ReservedAddress`, `BitmapOverlap`, and `NotUsableRegion` on `core.freePage()`, While `freePages()` Failure-Atomicity Spans Are Verified in Host Unit Tests Only)
 
-**Severity:** HIGH
+**Severity:** HIGH (Resolved)
 
 **Confidence:** HIGH
 
 **Affected component:**  
-Physical Memory Manager core ([`kernel/src/mm/physical_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig)) and kernel adapter ([`kernel/src/mm/physical.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig)).
+Physical Memory Manager core ([`kernel/src/mm/physical_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig)), kernel PMM adapter ([`kernel/src/mm/physical.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig)), and PMM host test suite ([`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig)).
 
 **Source location:**  
-- [`kernel/src/mm/physical_core.zig:186-218`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L186-L218) and [`kernel/src/mm/physical_core.zig:314-336`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L314-L336)
-- [`kernel/src/mm/physical.zig:124-136`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L124-L136)
+- [`kernel/src/mm/physical_core.zig:61-133`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L61-L133), [`kernel/src/mm/physical_core.zig:193-196, 222-241, 321-325`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L193-L196), and [`kernel/src/mm/physical_core.zig:492-590`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L492-L590)
+- [`kernel/src/mm/physical.zig:43-50, 89-127, 156-217`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L43-L50)
+- [`tests/pmm_test.zig:735-898`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L735-L898) and [`tests/pmm_test.zig:959-1049`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L959-L1049)
 
-**Evidence:**  
-In [`PhysicalAllocator.init()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L186-L218), the 1-bit-per-frame bitmap sets `1` (`isBitSet(frame) == true`) for all non-free frames: allocated `.usable` frames, reserved `< 1 MiB` frames, `.non_usable` (`.reserved` MMIO, `.executable_and_modules` kernel, `.bootloader_reclaimable`) frames, and the PMM bitmap's own physical frames.
-In [`PhysicalAllocator.freePage()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L314-L336):
-```zig
-pub fn freePage(self: *Self, paddr: u64) FreeError!void {
-    if (paddr % PAGE_SIZE != 0) {
-        return error.UnalignedAddress;
-    }
+**Resolution & Independent Audit Evaluation (v1.8, Commit `c1ef192b336ba548ac0acb5340d92143bdad7994`):**
+1. **Independently Reviewed Source Evidence:**
+   - **Deterministic 6-Step `validateFreePage()` Contract (`physical_core.zig:126-133, 492-565`):**
+     - [`FreeError`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L126-L133) defines `UnalignedAddress`, `OutOfBounds`, `ReservedAddress`, `BitmapOverlap`, `NotUsableRegion`, and `DoubleFree`.
+     - [`validateFreePage()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L522-L549) validates in strict order before any bitmap bit or counter mutation:
+       1. `paddr % PAGE_SIZE != 0` $\to$ `error.UnalignedAddress` (`lines 523-525`).
+       2. `std.math.cast(usize, paddr / PAGE_SIZE)` / `frame >= self.total_pages` $\to$ `error.OutOfBounds` (`lines 527-530`).
+       3. `paddr < LOW_MEMORY_LIMIT` (`0x100000`) $\to$ `error.ReservedAddress` (`lines 532-534`).
+       4. `self.overlapsBitmapPage(paddr)` (`paddr < self.bitmap_end_phys and page_end > self.bitmap_phys`, where `bitmap_end_phys` is page-rounded to `bitmap_pages * PAGE_SIZE`) $\to$ `error.BitmapOverlap` (`lines 492-496, 536-538`).
+       5. `!self.isPageInUsableRegion(paddr)` (requires `[paddr, paddr + PAGE_SIZE)` to be wholly contained within at least one `.usable` entry and to have zero overlap with any non-usable entry) $\to$ `error.NotUsableRegion` (`lines 498-520, 540-542`).
+       6. `!self.isBitSet(frame)` $\to$ `error.DoubleFree` (`lines 544-546`).
+   - **Two-Pass Atomic `freePages()` (`physical_core.zig:567-589`):**
+     - Returns immediately on `count == 0`, checks `paddr % PAGE_SIZE != 0` (`UnalignedAddress`) and `start_frame >= self.total_pages or count > self.total_pages - start_frame` (`OutOfBounds`), then validates every page in `0..count` via `validateFreePage(page_paddr)` (`lines 580-584`) before calling `releaseValidatedFrame(start_frame + i)` in Pass 2 (`lines 586-588`), preventing partial frees on mixed ranges.
+   - **Exhaustive Kernel Adapter Panic Mapping (`physical.zig:101-110`):**
+     - [`panicOnFreeError()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L101-L110) switches exhaustively over all six `FreeError` variants without a catch-all `else`, preserving existing panic messages for `UnalignedAddress`, `OutOfBounds`, and `DoubleFree` while mapping `ReservedAddress`, `BitmapOverlap`, and `NotUsableRegion` to dedicated `@panic` diagnostics.
+   - **Safe Region-Provider & Context Lifetime (`physical_core.zig:99-119, 196, 222-241`, `physical.zig:43-50, 117-127`):**
+     - `PhysicalAllocator` stores `region_source: RegionSource = .none` directly by value (`union(enum) { none, slice: []const MemoryRegion, provider: RegionProvider }`), so `initFromSlice()` stores `.{ .slice = regions }` directly without any self-referential pointer to an internal struct field that would dangle if `PhysicalAllocator` is returned or copied by value.
+     - In [`kernel/src/mm/physical.zig:46-49, 117-127`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L46-L49), the former stack-local `region_ctx` inside `init()` is replaced by module-static `var limine_region_ctx: LimineRegionContext`, ensuring `&limine_region_ctx` remains valid for the lifetime of the kernel while `.bootloader_reclaimable` memory remains reserved during Phase 1.
+2. **Regression Test & Provenance Boundary (Host Fake-Backend vs. QEMU Runtime):**
+   - **Independently Audited Host Regression Tests ([`tests/pmm_test.zig:735-898, 959-1049`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L735-L898)):**
+     - `"F-08: freePage enforces low-memory (<1MiB), page-rounded bitmap overlap, and usable-region boundaries"` (`lines 735-825`): Verifies `ReservedAddress` on `0x0`, `0x1000`, `0x80000`, `0xFF000`; `BitmapOverlap` across all 3 frames (`0x100000`, `0x101000`, and partial 32-byte 3rd page `0x102000`) of an 8,224-byte bitmap; `NotUsableRegion` across all 9 non-usable `RegionKind` variants, an unmapped gap (`0x10D000`), and unaligned `.usable` boundary pages (`0x10E000`, `0x111000`), asserting zero bitmap, counter, or scan-cursor mutations via `expectFreeUnchanged`.
+     - `"F-08: freePages fails atomically with zero bitmap or counter mutations"` (`lines 827-898`): Verifies zero partial frees when multi-page ranges cross from valid allocated usable pages into `.reserved`, `.bootloader_reclaimable`, bitmap frames, `< 1 MiB` frames, `usize` max count overflow, or an already-free page (`DoubleFree`).
+     - `"PMM retains region source safely across helper returns, stack reuse, and reinitialization"` (`lines 959-1049`): Verifies `createAllocatorViaSliceReturn()` by-value return + `clobberStackFrame()` and `initViaProviderHelper()` reinitialization with an external `ProviderLifetimeCtx`.
+   - **In-Kernel QEMU Runtime Coverage vs. Host Simulation:**
+     - [`pmm.testPmm()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L186-L217) in the live Ring 0 QEMU boot path non-destructively invokes `core.freePage(0x0)` (`error.ReservedAddress`), `core.freePage(bitmap_phys)` and `core.freePage(bitmap_end_phys - PAGE_SIZE)` (`error.BitmapOverlap`), and `core.freePage(start)` on the first tracked non-usable Limine page `>= 1 MiB` (`error.NotUsableRegion`).
+     - Multi-page `freePages()` failure-atomicity boundary permutations and stack-clobber/by-value return lifetime tests are verified in host unit tests (`tests/pmm_test.zig`), not under QEMU.
 
-    const frame: usize = physical_math.physToFrame(paddr);
-    if (frame >= self.total_pages) {
-        return error.OutOfBounds;
-    }
-
-    if (!self.isBitSet(frame)) {
-        return error.DoubleFree;
-    }
-
-    self.clearBit(frame);
-```
-
-**Technical explanation:**  
-A 1-bit allocation bitmap cannot prove which caller owns an allocated `.usable` frame. However, `freePage()` must still enforce static physical memory safety boundaries so that non-allocatable or permanently protected physical frames can never be injected into the free pool. Currently, because `isBitSet(frame)` is `true` for every protected/reserved frame below `highest_address`, `freePage()` accepts and marks `FREE` (`0`):
-1. Protected low-memory frames (`paddr < 0x100000`, including physical page `0x0`).
-2. Frames overlapping the PMM bitmap itself (`[bitmap_phys, bitmap_end_phys)`).
-3. Frames outside `.usable` memory map entries (such as `.executable_and_modules` kernel frames, `.bootloader_reclaimable` page-table/stack frames, and `.reserved` MMIO holes below `highest_address`).
-
-**Reproduction scenario:**  
-Calling `pmm.freePage(0x0)` or `pmm.freePage(bitmap_phys)` passes the alignment check (`% 4096 == 0`), bounds check (`frame < total_pages`), and `isBitSet(frame)` check (`true`), clearing bit `0` or the bitmap's own frame bit so the next `allocPage()` returns and zeroes page `0x0` or the PMM bitmap itself.
-
-**Impact:**  
-Overwriting the PMM bitmap, active kernel image, or bootloader page tables if an invalid physical address in a reserved/protected range is passed to `freePage()`.
-
-**Recommended correction:**  
-While keeping the existing page-alignment (`paddr % PAGE_SIZE != 0`), bounds (`frame >= total_pages`), and double-free (`!isBitSet(frame)`) checks, add three explicit validations in `PhysicalAllocator.freePage()`:
-1. **Protected low-memory check:** Reject `paddr < 0x100000` (`1 MiB`).
-2. **Bitmap self-overlap check:** Reject any `paddr` overlapping `[self.bitmap_phys, self.bitmap_phys + self.bitmap.len)`.
-3. **Allocatable-RAM membership check:** Verify that `paddr` lies within a `.usable` region of the memory map.
-
-**Regression tests:**  
-1. Host unit tests in [`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig) verifying `freePage()` rejects `paddr = 0x0`, `paddr = 0x80000` (`< 1 MiB`), `paddr = bitmap_phys`, and `paddr` inside a `.non_usable` region, while still rejecting double-free of a valid `.usable` frame.
+**Historical Evidence (Baseline `c10c05f1` through `b3cf68bb`):**
+Prior to `c1ef192b`, `freePage()` checked only page alignment, `frame >= total_pages`, and `!isBitSet(frame)`, allowing `< 1 MiB`, bitmap, and non-usable frames (whose bits are `1`) to be freed into the allocatable pool, and `physical.init()` passed a stack-local `&region_ctx` to `core.init()`.
 
 **Dependencies:**  
-Related to `F-07` and `F-16`; host test harness provided by completed `F-10` (`F-10B` Part 1).
+Related to `F-07`, `F-10` (`F-10B` Part 1), and `F-16`.
 
 ---
 
@@ -594,7 +580,7 @@ Related to `F-10` (`F-10B` Part 2) and `F-13`.
 
 ### [F-10] Host unit test suite lacks a testable kernel module architecture for pure and stateful PMM, VMM, and Heap cores
 
-**Status:** FIXED (Independently Source-Audited across `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`, `bc2efdb0e673a6086f59e5ad0ca1669216f8c604`, `0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6`, and `b3cf68bbfc659be339b24cf8b3110be7eb159b53`; `41/41` Host Unit Tests Across All 4 Optimization Modes and `Debug`/`ReleaseSafe` QEMU Smoke Tests Agent-Reported)
+**Status:** FIXED (Independently Source-Audited across `9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`, `bc2efdb0e673a6086f59e5ad0ca1669216f8c604`, `0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6`, `b3cf68bbfc659be339b24cf8b3110be7eb159b53`, and `c1ef192b336ba548ac0acb5340d92143bdad7994`; `47/47` Host Unit Tests Across All 4 Optimization Modes and `Debug`/`ReleaseSafe` QEMU Smoke Tests Agent-Reported)
 
 **Severity:** HIGH (Resolved)
 
@@ -606,18 +592,18 @@ Build test graph ([`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig))
 **Source location:**  
 - [`build.zig:123-210`](file:///home/leevawn/Projects/zig-os/build.zig#L123-L210)
 - [`kernel/src/mm/paging_math.zig:1-24`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/paging_math.zig#L1-L24), [`kernel/src/mm/physical_math.zig:1-29`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_math.zig#L1-L29), [`kernel/src/arch/x86_64/interrupts/page_fault.zig:1-20`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/interrupts/page_fault.zig#L1-L20), [`kernel/src/mm/heap_layout.zig:1-14`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig#L1-L14)
-- [`kernel/src/mm/physical_core.zig:1-365`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L1-L365) and [`kernel/src/mm/physical.zig:1-180`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L1-L180)
+- [`kernel/src/mm/physical_core.zig:1-596`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L1-L596) and [`kernel/src/mm/physical.zig:1-253`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L1-L253)
 - [`kernel/src/mm/virtual_core.zig:1-285`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/virtual_core.zig#L1-L285) and [`kernel/src/mm/virtual.zig:1-172`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/virtual.zig#L1-L172)
 - [`kernel/src/mm/heap_core.zig:1-299`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L1-L299) and [`kernel/src/mm/heap.zig:1-175`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L1-L175)
-- [`tests/unit_test.zig:1-222`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig#L1-L222), [`tests/pmm_test.zig:1-573`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L1-L573), [`tests/vmm_test.zig:1-780`](file:///home/leevawn/Projects/zig-os/tests/vmm_test.zig#L1-L780), and [`tests/heap_test.zig:1-631`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L1-L631)
+- [`tests/unit_test.zig:1-222`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig#L1-L222), [`tests/pmm_test.zig:1-1049`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L1-L1049), [`tests/vmm_test.zig:1-780`](file:///home/leevawn/Projects/zig-os/tests/vmm_test.zig#L1-L780), and [`tests/heap_test.zig:1-631`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L1-L631)
 
-**Resolution & Independent Audit Evaluation (v1.7, Snapshot `b3cf68bbfc659be339b24cf8b3110be7eb159b53`):**
+**Resolution & Independent Audit Evaluation (v1.7–v1.8, Snapshot `c1ef192b336ba548ac0acb5340d92143bdad7994`):**
 1. **Completed `F-10A` — Shared Pure-Module Extraction (`9df21f8b1e6bb4f26d4ab3ffe7bc88b7a6c656e6`):**
    - Extracted `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig` into hardware-independent production modules imported directly by both the freestanding kernel (`virtual_core.zig`, `physical_core.zig`, `handlers.zig`, `heap_core.zig`) and [`tests/unit_test.zig:6-9`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig#L6-L9) (7 host tests, zero duplicated helper definitions).
-2. **Completed `F-10B` Part 1 — Stateful PMM Core (`bc2efdb0e673a6086f59e5ad0ca1669216f8c604`):**
-   - [`kernel/src/mm/physical_core.zig:1-365`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L1-L365) implements `PhysicalAllocator` (`init`, `initFromSlice`, `allocPage`, `allocPages`, `freePage`, `freePages`, `isPageAllocated`) parameterized by `RegionProvider`, `BitmapProvider`, and `PageZeroer`, with zero Limine or HHDM dependencies.
-   - [`kernel/src/mm/physical.zig:1-180`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L1-L180) binds `PhysicalAllocator` to `limine.hhdm_request`, `limine.memmap_request`, `physToVirt`, and the existing kernel `@panic` contracts while synchronizing all public PMM globals via `syncGlobals()`.
-   - [`tests/pmm_test.zig:1-573`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L1-L573) imports `@import("physical_core")` (`build.zig:155-169`) and runs 10 stateful host tests against `physical_core.PhysicalAllocator` using `FakeMemoryBackend` (covering `< 1 MiB`, non-usable, and multi-page bitmap reservation, init failure state preservation, single/contiguous allocation and zeroing, unaligned/out-of-bounds/double-free rejection, OOM recovery, partial final bitmap byte/word boundaries, scan-cursor backward update/wraparound, and deterministic PRNG stress).
+2. **Completed `F-10B` Part 1 & PMM Hardening — Stateful PMM Core (`bc2efdb0e673a6086f59e5ad0ca1669216f8c604`, `c1ef192b336ba548ac0acb5340d92143bdad7994`):**
+   - [`kernel/src/mm/physical_core.zig:1-596`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L1-L596) implements `PhysicalAllocator` (`init`, `initFromSlice`, `allocPage`, `allocPages`, `freePage`, `freePages`, `isPageAllocated`) parameterized by `RegionProvider` / `RegionSource`, `BitmapProvider`, and `PageZeroer`, with zero Limine or HHDM dependencies.
+   - [`kernel/src/mm/physical.zig:1-253`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L1-L253) binds `PhysicalAllocator` to `limine.hhdm_request`, `limine.memmap_request` (via module-static `limine_region_ctx` and `mapLimineRegionKind()`), `physToVirt`, and the kernel `@panic` contracts while synchronizing all public PMM globals via `syncGlobals()`.
+   - [`tests/pmm_test.zig:1-1049`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L1-L1049) imports `@import("physical_core")` (`build.zig:155-169`) and runs 16 stateful host tests against `physical_core.PhysicalAllocator` using `FakeMemoryBackend` (10 foundational tests from `bc2efdb` plus 6 `F-07`/`F-08`/`F-16`/lifetime regression tests added at `c1ef192`).
 3. **Completed `F-10B` Part 2 — Stateful VMM Core (`0156e9102b22a30e3d31e7b09d16dd2f1a3f58b6`):**
    - [`kernel/src/mm/virtual_core.zig:1-285`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/virtual_core.zig#L1-L285) implements `mapPage`, `unmapPage`, `virtToPhys`, `isMapped`, `isCanonical`, `PageTable`, `Flags`, `MapError`, and `UnmapError` over an injected `Backend` (`resolveTableFn`, `allocTableFn`, `freeTableFn`, `invlpgFn`), with zero privileged `CR3` or `invlpg` instructions in the core.
    - [`kernel/src/mm/virtual.zig:1-172`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/virtual.zig#L1-L172) binds `virtual_core` to `cpu.readCr3()`, `pmm.physToVirt()`, `pmm.allocPage()`, `pmm.freePage()`, and `cpu.invlpg()`.
@@ -627,8 +613,8 @@ Build test graph ([`build.zig`](file:///home/leevawn/Projects/zig-os/build.zig))
    - [`kernel/src/mm/heap.zig:1-175`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap.zig#L1-L175) binds `HeapAllocator` (`HEAP_START`, `HEAP_MAX_SIZE`) to `vmm.getActivePml4()`, `pmm.allocPage()`, `vmm.mapPage(..., vmm.Flags.WRITABLE)`, and `pmm.freePage()`, preserving all public globals (`current_heap_end`, `head_block`, `initialized`, `total_allocated_bytes`, `total_freed_bytes`), `init`, `allocate`, `deallocate`, `vtable`, `allocator`, `testHeap`, and `@panic` strings.
    - [`tests/heap_test.zig:1-631`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig#L1-L631) imports `@import("heap_core")` (`build.zig:189-203`) and runs 14 stateful host tests (`Heap 01`–`Heap 14`) against `heap_core.HeapAllocator` over page-aligned host buffers (`FakeHeapBackend`).
 5. **Unified `zig build test` Target Architecture (`build.zig:123-210`):**
-   - `unit_test_step` (`b.step("test", "Run host unit tests")`) depends on all four test artifacts (`run_unit_tests` [7 tests in `tests/unit_test.zig`], `run_pmm_tests` [10 tests in `tests/pmm_test.zig`], `run_vmm_tests` [10 tests in `tests/vmm_test.zig`], and `run_heap_tests` [14 tests in `tests/heap_test.zig`]) for an aggregate of **41 host unit tests** (note that stateful tests reside in dedicated `pmm_test.zig`, `vmm_test.zig`, and `heap_test.zig` targets wired into `zig build test` rather than inside `tests/unit_test.zig`).
-   - **Provenance Boundary:** Source architecture across all 12 files was independently audited by Argon at `b3cf68bbfc659be339b24cf8b3110be7eb159b53`; uncached execution of `41/41` host tests across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`, 4-mode kernel compilation, and `Debug`/`ReleaseSafe` QEMU smoke tests are implementation-agent-reported.
+   - `unit_test_step` (`b.step("test", "Run host unit tests")`) depends on all four test artifacts (`run_unit_tests` [7 tests in `tests/unit_test.zig`], `run_pmm_tests` [16 tests in `tests/pmm_test.zig`], `run_vmm_tests` [10 tests in `tests/vmm_test.zig`], and `run_heap_tests` [14 tests in `tests/heap_test.zig`]) for an aggregate of **47 host unit tests** (note that stateful tests reside in dedicated `pmm_test.zig`, `vmm_test.zig`, and `heap_test.zig` targets wired into `zig build test` rather than inside `tests/unit_test.zig`).
+   - **Provenance Boundary:** Source architecture across all 12 files was independently audited by Argon through `c1ef192b336ba548ac0acb5340d92143bdad7994`; uncached execution of `47/47` host tests across `Debug`, `ReleaseSafe`, `ReleaseFast`, and `ReleaseSmall`, 4-mode kernel compilation, and `Debug`/`ReleaseSafe` QEMU smoke tests are implementation-agent-reported.
 
 **Historical Evidence (Baseline `c10c05f1`):**
 At baseline `c10c05f1`, `tests/unit_test.zig` duplicated 5 pure helpers/structs locally with zero `@import` edges into `kernel/src/`, and stateful PMM, VMM, and Heap algorithms were coupled directly to Limine globals, HHDM pointers, `HEAP_START`, and privileged CPU instructions (`CR3`, `invlpg`).
@@ -938,57 +924,43 @@ Directly interacts with `F-01` (SIMD/FPU strategy) and Phase 2 task FPU state ma
 
 ### [F-16] PMM bitmap placement check (`entry.base != 0`) permits placing the bitmap below 1 MiB (`0x100000`)
 
-**Status:** VERIFIED
+**Status:** FIXED (Independently Source-Audited at `c1ef192b336ba548ac0acb5340d92143bdad7994` & Reviewed by ChatGPT; Host Production-Core Regression Tests `F-16` Agent-Reported Passing; Live Ring 0 `pmm.testPmm()` Verifies `bitmap_phys >= 0x100000`, Page Alignment, and Full `[bitmap_phys, bitmap_end_phys)` Frame Reservation)
 
-**Severity:** LOW
+**Severity:** LOW (Resolved)
 
 **Confidence:** HIGH
 
 **Affected component:**  
-Physical Memory Manager core ([`kernel/src/mm/physical_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig)) and kernel adapter ([`kernel/src/mm/physical.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig)).
+Physical Memory Manager core ([`kernel/src/mm/physical_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig)), kernel PMM adapter ([`kernel/src/mm/physical.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig)), and PMM host test suite ([`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig)).
 
 **Source location:**  
-- [`kernel/src/mm/physical_core.zig:158-166`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L158-L166) and [`kernel/src/mm/physical_core.zig:198-202`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L198-L202)
-- [`kernel/src/mm/physical.zig:80-110`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L80-L110)
+- [`kernel/src/mm/physical_core.zig:10`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L10), [`kernel/src/mm/physical_core.zig:159-184`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L159-L184), [`kernel/src/mm/physical_core.zig:275-326`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L275-L326), and [`kernel/src/mm/physical_core.zig:388-395`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L388-L395)
+- [`kernel/src/mm/physical.zig:25-26, 89-99, 178-185`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L178-L185)
+- [`tests/pmm_test.zig:144-188, 214-224, 244-266, 548-564, 900-957`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L900-L957)
 
-**Evidence:**  
-In [`PhysicalAllocator.init()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L158-L166) (extracted in `bc2efdb`):
-```zig
-// Preserve existing bitmap placement rule: first non-zero-based usable entry holding bitmap_size_bytes.
-var chosen_bitmap_phys: ?u64 = null;
-for (0..region_count) |i| {
-    const region = regions.get(i);
-    if (region.kind == .usable and region.length >= computed_bitmap_size and region.base != 0) {
-        chosen_bitmap_phys = region.base;
-        break;
-    }
-}
-```
-Compare with lines 198–202 in the same function:
-```zig
-// Keep the first 1 MiB / page 0 reserved for legacy BIOS/hardware stability.
-if (@as(u64, @intCast(frame)) * PAGE_SIZE < 0x100000) {
-    continue;
-}
-```
+**Resolution & Independent Audit Evaluation (v1.8, Commit `c1ef192b336ba548ac0acb5340d92143bdad7994`):**
+1. **Independently Reviewed Source Evidence:**
+   - **Strict `>= 1 MiB` & Page-Aligned Candidate Selection (`physical_core.zig:10, 163-167, 278-306`):**
+     - `LOW_MEMORY_LIMIT: u64 = 0x100000` (`line 10`).
+     - In [`initWithSource()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L282-L306), only `region.kind.isUsable()` entries with `region.length > 0` are considered; for each entry, `candidate_start = alignUpPage(@max(region.base, LOW_MEMORY_LIMIT)) orelse continue;` clamps regions starting below `1 MiB` up to `0x100000` and aligns sub-page starts upward to a `PAGE_SIZE` (`4096`) boundary, rejecting regions where `candidate_start >= region_end`.
+   - **Complete Page-Rounded Backing Fit & Non-Usable Overlap Rejection (`physical_core.zig:173-184, 275-276, 294-305`):**
+     - Computes `bitmap_pages_u64 = bytesToPageCountCeil(@as(u64, @intCast(computed_bitmap_size)))` and `bitmap_backing_bytes = std.math.mul(u64, bitmap_pages_u64, PAGE_SIZE) catch return error.NoUsableBitmapRegion`.
+     - Requires `(region_end - candidate_start) >= bitmap_backing_bytes` (so a `.usable` region that holds `computed_bitmap_size` unrounded bytes but fewer than `bitmap_pages_u64` full physical frames is skipped) and rejects candidates where `overlapsNonUsableRegion(source, candidate_start, candidate_end)` is `true`.
+   - **Full Backing-Frame Reservation Including Partial Final Pages (`physical_core.zig:321-322, 388-395`):**
+     - Stores `bitmap_phys = resolved_bitmap_phys` and `bitmap_end_phys = chosen_bitmap_end` (`candidate_start + bitmap_backing_bytes`), synced to `physical.bitmap_phys` and `physical.bitmap_end_phys` (`physical.zig:25-26, 92-93`).
+     - Reserves every frame in `[physToFrame(resolved_bitmap_phys), physToFrame(chosen_bitmap_end))` via `self.setBit(b_frame)` (`lines 389-395`) prior to recounting `used_pages` and `free_pages`, ensuring even a partial final logical bitmap page is marked `USED` and protected against both `allocPage()` and `freePage()` (`error.BitmapOverlap`).
+2. **Regression Test & Provenance Boundary (Host Fake-Backend vs. QEMU Runtime):**
+   - **Independently Audited Host Regression Tests ([`tests/pmm_test.zig:900-957`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L900-L957), plus `lines 144-188, 214-224, 244-266, 548-564`):**
+     - `"F-16: bitmap placement strictly enforces >= 1 MiB, alignment, complete multi-page fit, and later fallback"` (`lines 900-957`): Verifies (1) a `.usable` region strictly below `1 MiB` (`[0x1000, 0x100000)`) fails with `error.NoUsableBitmapRegion`; (2) a `.usable` region crossing `1 MiB` (`[0x80000, 0x104000)`) clamps `bitmap_phys` to `0x100000` (`bitmap_end_phys = 0x101000`) while keeping `< 1 MiB` reserved; and (3) a 5,120-byte (2-page = 8,192 B backing) bitmap skips `< 1 MiB` (`0x1000..0x41000`), a crossing region with only `0x800` B above `1 MiB` (`0x80000..0x100800`), a 6,144-byte `.usable` region (`>= 5,120 B` logical size but `< 8,192 B` page-rounded size), and an unaligned `.usable` region (`0x104400..0x106000`, leaving only 1 page after `alignUpPage` to `0x105000`), selecting the later qualifying region `0x108400..0x10C000` at aligned `bitmap_phys = 0x109000` (`bitmap_end_phys = 0x10B000`) while leaving skipped usable frames `0x101000`, `0x105000`, and `0x10B000` free.
+   - **In-Kernel QEMU Runtime Coverage vs. Host Simulation:**
+     - [`pmm.testPmm()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L178-L185) in the live Ring 0 QEMU boot path verifies `bitmap_phys >= physical_core.LOW_MEMORY_LIMIT`, `bitmap_phys % PAGE_SIZE == 0`, `bitmap_end_phys > bitmap_phys`, and `isPageAllocated(probe_b)` for every frame in `[bitmap_phys, bitmap_end_phys)`.
+     - Multi-candidate `< 1 MiB` / unaligned / insufficient-page-fit skip permutations are verified in host unit tests (`tests/pmm_test.zig`), not under QEMU.
 
-**Technical explanation:**  
-Line 199 of `physical_core.zig`, [`docs/ARCHITECTURE.md:82`](file:///home/leevawn/Projects/zig-os/docs/ARCHITECTURE.md#L82), [`ADR-0001:29`](file:///home/leevawn/Projects/zig-os/docs/adr/0001-higher-half-kernel-memory-layout.md#L29), and [`.agents/rules/04-memory-management.md:12`](file:///home/leevawn/Projects/zig-os/.agents/rules/04-memory-management.md#L12) all specify that physical memory below `1 MiB` (`0x0..0x100000`) must remain reserved. However, the bitmap placement loop at line 162 only checks `region.base != 0` instead of `region.base >= 0x100000`. Because Limine reserves page `0x0` (`0x0..0x1000`) and reports conventional low RAM starting above `0x0` (below the EBDA at `~0x9F000`) as `.usable`, any `.usable` entry with `0 < region.base < 0x100000` and `region.length >= computed_bitmap_size` is selected by line 162 for `chosen_bitmap_phys` (as demonstrated in [`tests/pmm_test.zig:511-521`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig#L511-L521), where `region.base = 0x1000` is selected for `pmm.bitmap_phys`). *(Note: The current boot log does not print the memory map entries or `bitmap_phys`, so the exact physical address chosen in QEMU is not asserted without runtime logging; what is statically `VERIFIED` is that `region.base != 0` permits `< 1 MiB` placement whenever that conventional `.usable` entry is `>= computed_bitmap_size`.)*
-
-**Reproduction scenario:**  
-Given any memory map whose first `.usable` entry has `0 < region.base < 0x100000` and `region.length >= computed_bitmap_size`, `PhysicalAllocator.init()` selects `bitmap_phys = region.base` (`< 0x100000`).
-
-**Impact:**  
-Violates the project's `< 1 MiB` reservation policy (which protects low memory for legacy BIOS data and future SMP AP real-mode startup trampolines), although it does not corrupt non-usable memory in Phase 1 because `region.kind == .usable` and the bitmap frames are marked used at `physical_core.zig:209-217`.
-
-**Recommended correction:**  
-Require `bitmap_phys >= 0x100000` when scanning `.usable` entries in `PhysicalAllocator.init()` (clamping candidate region starts below `0x100000` up to `0x100000` and checking if the remaining length is `>= computed_bitmap_size`).
-
-**Regression tests:**  
-1. Assert `pmm.bitmap_phys >= 0x100000` in [`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig) and `pmm.virtToPhys(@intFromPtr(pmm.bitmap)) >= 0x100000` in `pmm.testPmm()`, and log `bitmap_phys` during PMM initialization.
+**Historical Evidence (Baseline `c10c05f1` through `b3cf68bb`):**
+Prior to `c1ef192b`, `PhysicalAllocator.init()` checked only `region.kind == .usable and region.length >= computed_bitmap_size and region.base != 0`, permitting `< 1 MiB` placement (such as `0x1000`) and checking unrounded byte size rather than page-rounded frame capacity.
 
 **Dependencies:**  
-Related to `F-07` and `F-08`; host test harness provided by completed `F-10` (`F-10B` Part 1).
+Related to `F-07`, `F-08`, and `F-10` (`F-10B` Part 1).
 
 ---
 
@@ -1004,13 +976,13 @@ Related to `F-07` and `F-08`; host test harness provided by completed `F-10` (`F
 Physical Memory Manager core ([`kernel/src/mm/physical_core.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig)) and kernel adapter ([`kernel/src/mm/physical.zig`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig)).
 
 **Source location:**  
-- [`kernel/src/mm/physical_core.zig:94-98`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L94-L98) and [`kernel/src/mm/physical_core.zig:190-248`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L190-L248)
-- [`kernel/src/mm/physical.zig:18-21, 62-70`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L18-L21)
+- [`kernel/src/mm/physical_core.zig:188-192`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L188-L192) and [`kernel/src/mm/physical_core.zig:316-320, 353-426`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L353-L426)
+- [`kernel/src/mm/physical.zig:19-23, 89-99, 174-252`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L19-L23)
 
 **Evidence:**  
-In [`physical_core.zig:190-248`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L190-L248) and [`physical.zig:18-21`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L18-L21):
-- `usable_pages` is zeroed at `physical_core.zig:177`, incremented at line 203 for each `.usable` frame `>= 0x100000` before the bitmap frames are marked used (lines 209–217), and is never read by any kernel subsystem outside `tests/pmm_test.zig:163`.
-- `used_pages` and `free_pages` are recounted over `0..total_pages` at `physical_core.zig:220-248` (so `used_pages` includes all non-usable/reserved/MMIO frames plus the bitmap frames, and `used_pages + free_pages == total_pages`), updated on `allocPage()`/`allocPages()`/`freePage()`, and checked in `pmm.testPmm()` (`physical.zig:143-177`) and `tests/pmm_test.zig`.
+In [`physical_core.zig:316-426`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L316-L426) and [`physical.zig:19-23`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical.zig#L19-L23):
+- `usable_pages` is zeroed at `physical_core.zig:317`, incremented at `line 356` for each whole `.usable` frame `>= 0x100000` (and decremented at `line 382` if overlapped by a non-usable region) before the bitmap frames `[bitmap_phys, bitmap_end_phys)` are marked used (`lines 388-395`), and is never read by any kernel subsystem outside `tests/pmm_test.zig`.
+- `used_pages` and `free_pages` are recounted over `0..total_pages` at `physical_core.zig:397-426` (so `used_pages` includes all non-usable/reclaimable/kernel frames and `< 1 MiB` frames below `highest_address` plus the bitmap frames, and `used_pages + free_pages == total_pages`), updated on `allocPage()`/`allocPages()`/`freePage()`/`freePages()`, and checked in `pmm.testPmm()` (`physical.zig:174-252`) and `tests/pmm_test.zig`.
 - *(Note: The unused `total_usable_bytes` local variable present at `c10c05f` was removed during `F-10B` Part 1 at `bc2efdb`.)*
 
 **Technical explanation:**  
@@ -1186,50 +1158,49 @@ The following claims from prior audit reports and earlier revisions were indepen
 
 ## 6. Prioritization & Phase 1 Hardening Plan
 
-> **Governance Gate Notice:** This section defines the proposed engineering sequence for **Phase 1 Hardening**. It does **not** authorize Phase 2 (`NOT AUTHORIZED`) and does **not** mark Phase 1 as Human Approved (`Pending Human Review`). Completing `F-10` (or `F-01`, `F-09`, `F-13`, `F-14`) does not constitute Project Owner approval of Phase 1 or Phase 2. Only the Project Owner may approve milestone gates.
+> **Governance Gate Notice:** This section defines the proposed engineering sequence for **Phase 1 Hardening**. It does **not** authorize Phase 2 (`NOT AUTHORIZED`) and does **not** mark Phase 1 as Human Approved (`Pending Human Review`). Completing `F-10` (or `F-01`, `F-07`, `F-08`, `F-09`, `F-13`, `F-14`, `F-16`) does not constitute Project Owner approval of Phase 1 or Phase 2. Only the Project Owner may approve milestone gates.
 
 ### P0 — Must Fix Before Further Kernel Development (0 Active Findings — All 3 Resolved)
 
 **Included Active Findings:** None (`F-01`, `F-10`, and `F-14` are `FIXED`)
 - **`F-01` (`FIXED` at `515aa91`):** Freestanding kernel target in [`build.zig:4-20`](file:///home/leevawn/Projects/zig-os/build.zig#L4-L20) subtracts `.x87`, `.mmx`, `.sse`, `.sse2`, `.avx`, `.avx2` and adds `.soft_float`.
 - **`F-14` (`FIXED` at `7711468`):** All public build/run/debug/test entrypoints enforce unconditional fresh builds, `ReleaseSafe` default optimization, a non-recursive Zig build graph, and 3-way kernel ELF SHA-256 provenance verification prior to QEMU launch.
-- **`F-10` (`FIXED` across `9df21f8`, `bc2efdb`, `0156e91`, and `b3cf68b`):** `zig build test` ([`build.zig:123-210`](file:///home/leevawn/Projects/zig-os/build.zig#L123-L210)) compiles and runs four host test targets directly against production kernel modules with zero test-side algorithm duplication:
+- **`F-10` (`FIXED` across `9df21f8`, `bc2efdb`, `0156e91`, `b3cf68b`, and `c1ef192`):** `zig build test` ([`build.zig:123-210`](file:///home/leevawn/Projects/zig-os/build.zig#L123-L210)) compiles and runs four host test targets directly against production kernel modules with zero test-side algorithm duplication:
   - `unit_test` ([`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig)): 7 tests importing `paging_math.zig`, `physical_math.zig`, `page_fault.zig`, and `heap_layout.zig` (`F-10A`).
-  - `pmm_test` ([`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig)): 10 stateful tests importing `physical_core.zig` (`F-10B` Part 1).
-  - `vmm_test` ([`tests/vmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/vmm_test.zig)): 10 stateful tests importing `virtual_core.zig` (`F-10B` Part 2).
+  - `pmm_test` ([`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig)): 16 stateful tests importing `physical_core.zig` (`F-10B` Part 1 + `F-07`/`F-08`/`F-16` hardening).
+  - `vmm_test` ([`tests/vmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/vmm_test.zig)): 10 stateful tests importing `virtual_core.zig` (`F-10B` Part 2 + `F-09`/`F-13` hardening).
   - `heap_test` ([`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig)): 14 stateful tests importing `heap_core.zig` (`F-10B` Part 3).
 
 ---
 
-### P1 — Must Fix Before Phase 2 Authorization (8 Active Findings)
+### P1 — Must Fix Before Phase 2 Authorization (6 Active Findings)
 
-**Included Active Findings:** `F-03`, `F-04`, `F-06`, `F-07`, `F-08`, `F-11`, `F-12`, `F-15`
-*(Note: VMM findings `F-09` and `F-13` were resolved at `0156e91` in `virtual_core.zig` and `virtual.zig`, with host regression tests in `tests/vmm_test.zig` and Ring 0 canonical/alignment checks in `vmm.testVmm()`).*
+**Included Active Findings:** `F-03`, `F-04`, `F-06`, `F-11`, `F-12`, `F-15`
+*(Note: VMM findings `F-09` and `F-13` were resolved at `0156e91` in `virtual_core.zig` and `virtual.zig`, and PMM findings `F-07` and `F-08` were resolved at `c1ef192` in `physical_core.zig` and `physical.zig`).*
 
 - **Dependencies:** Enabled by completed **P0** foundation (`F-01` SIMD prohibition, `F-10` host-testable core modules, and `F-14` rebuild/provenance pipeline). `F-04` requires updating/superseding [`ADR-0003`](file:///home/leevawn/Projects/zig-os/docs/adr/0003-limine-gdt-preservation-phase1.md); `F-15` coordinates with `F-01` and Phase 2 FPU context switching.
 - **Required Implementation Tasks:**
   1. **`F-03`, `F-04`, & `F-15` (Interrupt Vector Protection, GDT/TSS/IST, Frame Verification, & `CR0.TS` Initialization):** Prohibit Ring 0 software `INT n` to hardware error-code exception vectors (`8, 10..14, 17, 21, 29, 30`), remap or keep masked the legacy 8259 PIC (`>= 0x20`), assign APIC interrupt vectors outside `0–31`, and preserve `DPL = 0` on exception gates (`F-03`, noting dynamic stack alignment alone does not repair a missing error-code slot); install a kernel-owned GDT and 64-bit TSS (`lgdt`, `ltr`) with a dedicated `IST1` stack for `#DF` (Vector 8) (`F-04`); clear `CR0.TS` (bit 3) alongside `CR0.EM` (bit 2) in [`cpu.enableSse()`](file:///home/leevawn/Projects/zig-os/kernel/src/arch/x86_64/cpu.zig#L117-L129) so `CR0.TS == 0` is guaranteed under Limine Base Revision 3 (`F-15`).
   2. **`F-06`, `F-11`, & `F-12` (Heap Hardening in `heap_layout.zig` / `heap_core.zig`):** Store `align_offset: u32` in [`BlockHeader`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_layout.zig#L4-L12) and enforce `raw_addr == payload_start + block.align_offset` in [`HeapAllocator.deallocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L189-L208); include alignment padding in `pages_needed` and handle partial expansion / free tail blocks in [`HeapAllocator.expandHeap()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L93-L131); check `init()` expansion status; validate `std.math.isPowerOfTwo(alignment)` and `size <= self.heap_max_size` before arithmetic in [`HeapAllocator.allocate()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/heap_core.zig#L133-L187).
-  3. **`F-07` & `F-08` (PMM Hardening in `physical_core.zig` / `physical.zig`):** Compute `highest_address` across RAM/reclaimable memory map entries only (excluding `.reserved` MMIO apertures); in [`PhysicalAllocator.freePage()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L314-L336), validate `paddr >= 0x100000`, non-overlap with `[self.bitmap_phys, self.bitmap_phys + self.bitmap.len)`, and membership in a `.usable` memory map region.
 - **Required Regression Tests:**
   - **`F-15` (Dual-Layer `CR0.TS` Verification):** (a) Privileged in-kernel QEMU runtime test that deliberately sets `CR0.TS = 1` immediately before calling `cpu.enableSse()` (with zero intervening FPU/SSE instructions) and verifies `(cpu.readCr0() & ((1 << 2) | (1 << 3))) == 0` afterward, and (b) host unit test in [`tests/unit_test.zig`](file:///home/leevawn/Projects/zig-os/tests/unit_test.zig) verifying the pure `computeSseCr0()` bit-mask helper clears `CR0.TS` and `CR0.EM` on synthetic `CR0` values.
-  - Host unit tests in [`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig) and [`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig) (plus in-kernel self-tests) covering interior/padding/slack pointer free rejection (`F-06`), `allocate(16336, 64)` single-expansion and 2-page headroom behavior (`F-11`), overflow/non-power-of-two alignment rejection (`F-12`), PMM high-MMIO-hole sizing (`F-07`), and `freePage(0x0)` / `freePage(bitmap_phys)` / non-usable region rejection (`F-08`).
+  - Host unit tests in [`tests/heap_test.zig`](file:///home/leevawn/Projects/zig-os/tests/heap_test.zig) (plus in-kernel self-tests) covering interior/padding/slack pointer free rejection (`F-06`), `allocate(16336, 64)` single-expansion and 2-page headroom behavior (`F-11`), and overflow/non-power-of-two alignment rejection (`F-12`).
   - Three-regime QEMU interrupt frame verification (`F-04`): (a) same-CPL (`IST = 0`) exceptions verifying saved `frame.rsp` and `frame.ss`, (b) `IST1` stack-switched `#DF` verifying `IST1` stack pointer and interrupted `frame.rsp`/`frame.ss`, and (c) `CPL 3 -> CPL 0` privilege transition frame verification once Ring 3 exists.
 - **Acceptance Criteria:** All CPU `CR0`/`CR4`, PMM, VMM, Heap, GDT/TSS, and IDT invariants pass host unit tests (`zig build test`) and fresh-build QEMU runtime verification in both `Debug` and `ReleaseSafe` modes.
 
 ---
 
-### P2 — Important Hardening That Can Follow (2 Active Findings)
+### P2 — Important Hardening That Can Follow (1 Active Finding)
 
-**Included Active Findings:** `F-16`, `F-19`
+**Included Active Findings:** `F-19`
+*(Note: `F-16` was resolved at `c1ef192` in `physical_core.zig` and `physical.zig`).*
 
-- **Dependencies:** `F-16` coordinates with `F-07`/`F-08`; `F-19` requires Project Owner selection between Base Revision 3 explicit ACPI mapping vs. Base Revision 4 ADR update.
+- **Dependencies:** `F-19` requires Project Owner selection between Base Revision 3 explicit ACPI mapping vs. Base Revision 4 ADR update.
 - **Required Implementation Tasks:**
-  1. **`F-16`:** Enforce `bitmap_phys >= 0x100000` (`1 MiB`) in [`PhysicalAllocator.init()`](file:///home/leevawn/Projects/zig-os/kernel/src/mm/physical_core.zig#L158-L166) and log the selected `bitmap_phys` address.
-  2. **`F-19`:** Before Phase 2 ACPI table access, either map `.acpi_reclaimable` / `.acpi_nvs` regions into the HHDM via `vmm.mapPage()` or advance Limine Base Revision to `4` via an approved ADR.
+  1. **`F-19`:** Before Phase 2 ACPI table access, either map `.acpi_reclaimable` / `.acpi_nvs` regions into the HHDM via `vmm.mapPage()` or advance Limine Base Revision to `4` via an approved ADR.
 - **Required Regression Tests:**
-  - Assert `bitmap_phys >= 0x100000` in [`tests/pmm_test.zig`](file:///home/leevawn/Projects/zig-os/tests/pmm_test.zig) and `pmm.testPmm()`, and verify HHDM reachability of `.acpi_reclaimable` frames before ACPI parsing.
-- **Acceptance Criteria:** `< 1 MiB` strictly preserved for SMP trampolines and ACPI memory safely mapped prior to Phase 2 MADT discovery.
+  - Verify HHDM reachability of `.acpi_reclaimable` frames before ACPI parsing.
+- **Acceptance Criteria:** ACPI memory safely mapped prior to Phase 2 MADT discovery.
 
 ---
 
