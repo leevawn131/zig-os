@@ -11,6 +11,8 @@ pub const HEAP_MAX_SIZE: u64 = 64 * 1024 * 1024; // 64 MiB maximum virtual heap
 
 pub const BlockHeader = heap_core.BlockHeader;
 pub const HEADER_SIZE: usize = heap_core.HEADER_SIZE;
+pub const InitError = heap_core.InitError;
+pub const FreeError = heap_core.FreeError;
 
 pub var current_heap_end: u64 = HEAP_START;
 pub var head_block: ?*BlockHeader = null;
@@ -42,9 +44,20 @@ inline fn syncGlobals() void {
     total_freed_bytes = core.total_freed_bytes;
 }
 
-pub fn init(initial_pages: usize) void {
-    core.init(initial_pages);
+pub fn tryInit(initial_pages: usize) InitError!void {
+    core.init(initial_pages) catch |err| {
+        syncGlobals();
+        return err;
+    };
     syncGlobals();
+}
+
+pub fn init(initial_pages: usize) void {
+    tryInit(initial_pages) catch |err| switch (err) {
+        error.InvalidInitialPageCount => @panic("HEAP: Initial heap page count must be > 0"),
+        error.CapacityExceeded => @panic("HEAP: Initial heap size exceeds maximum heap capacity"),
+        error.ExpansionFailed => @panic("HEAP: Failed to map initial heap backing pages"),
+    };
 }
 
 pub fn allocate(size: usize, alignment: usize) ?[*]u8 {
@@ -160,6 +173,31 @@ pub fn testHeap() bool {
     for (b2[0..128]) |byte| {
         if (byte != 0x77) return false;
     }
+
+    // F-06 Ring 0 regression checks: non-base pointers must fail with BlockHeaderNotFound
+    const b2_addr = @intFromPtr(b2);
+    const minus_8: [*]u8 = @ptrFromInt(b2_addr - 8);
+    const plus_1: [*]u8 = @ptrFromInt(b2_addr + 1);
+    const plus_128: [*]u8 = @ptrFromInt(b2_addr + 128);
+    if (core.deallocate(minus_8)) |_| return false else |err| {
+        if (err != error.BlockHeaderNotFound) return false;
+    }
+    if (core.deallocate(plus_1)) |_| return false else |err| {
+        if (err != error.BlockHeaderNotFound) return false;
+    }
+    if (core.deallocate(plus_128)) |_| return false else |err| {
+        if (err != error.BlockHeaderNotFound) return false;
+    }
+
+    // F-12 Ring 0 regression checks: overflow and invalid alignment must fail without mutation
+    const allocated_before_invalid = total_allocated_bytes;
+    const end_before_invalid = current_heap_end;
+    if (allocate(std.math.maxInt(usize), 16) != null) return false;
+    if (allocate(64, 0) != null) return false;
+    if (allocate(64, 24) != null) return false;
+    if (allocate(64, HEAP_MAX_SIZE * 2) != null) return false;
+    if (total_allocated_bytes != allocated_before_invalid) return false;
+    if (current_heap_end != end_before_invalid) return false;
 
     // Free all allocations
     alloc.free(slice);

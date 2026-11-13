@@ -145,8 +145,14 @@ fn assertListInvariants(heap: *const HeapAllocator) !void {
         try testing.expectEqual(CANARY, block.canary);
         if (block.is_free) {
             try testing.expectEqual(MAGIC_FREE, block.magic);
+            try testing.expectEqual(@as(u32, 0), block.align_offset);
+            if (prev_block) |pb| {
+                try testing.expect(!pb.is_free);
+            }
         } else {
             try testing.expectEqual(MAGIC_USED, block.magic);
+            try testing.expect(@as(usize, block.align_offset) <= block.size);
+            try testing.expect(block.size - @as(usize, block.align_offset) >= 16);
         }
 
         const block_addr = @intFromPtr(block);
@@ -175,7 +181,7 @@ test "Heap 01: initialization creates coalesced initial free block and idempoten
     try testing.expect(!heap.initialized);
     try testing.expectEqual(@as(u64, 0), heap.mappedBytes());
 
-    heap.init(4);
+    try heap.init(4);
     try testing.expect(heap.initialized);
     try testing.expect(!fake.unexpected_addr);
     try testing.expectEqual(@as(usize, 4), fake.mapped_pages);
@@ -193,7 +199,7 @@ test "Heap 01: initialization creates coalesced initial free block and idempoten
     try fake.expectUnmappedPoisonedFrom(4);
 
     // Calling init a second time must be a no-op.
-    heap.init(2);
+    try heap.init(2);
     try testing.expectEqual(@as(usize, 4), fake.mapped_pages);
     try testing.expectEqual(@as(u64, 4 * PAGE_SIZE), heap.mappedBytes());
 }
@@ -203,7 +209,7 @@ test "Heap 02: zero-sized allocation returns null without modifying heap state" 
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(2);
+    try heap.init(2);
     const prev_size = heap.head_block.?.size;
 
     try testing.expectEqual(@as(?[*]u8, null), heap.allocate(0, 16));
@@ -220,7 +226,7 @@ test "Heap 03: basic small allocations enforce minimum 16-byte alignment and USE
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(4);
+    try heap.init(4);
 
     const p1 = heap.allocate(1, 1) orelse return error.TestUnexpectedResult;
     const p2 = heap.allocate(24, 8) orelse return error.TestUnexpectedResult;
@@ -257,7 +263,7 @@ test "Heap 04: power-of-two over-alignment returns 64-byte and 256-byte aligned 
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(4);
+    try heap.init(4);
 
     const p64 = heap.allocate(128, 64) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(@as(usize, 0), @intFromPtr(p64) % 64);
@@ -281,7 +287,7 @@ test "Heap 05: allocation splitting preserves list links and skips splitting bel
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(1); // Single free block of 4096 - 40 = 4056 bytes
+    try heap.init(1); // Single free block of 4096 - 40 = 4056 bytes
 
     // Split case: aligned_size=64, align_offset=8, total_needed=72; excess = 4056 - 72 = 3984 > HEADER_SIZE + 32.
     const p1 = heap.allocate(64, 16) orelse return error.TestUnexpectedResult;
@@ -316,7 +322,7 @@ test "Heap 06: deallocation and forward coalescing merge adjacent trailing free 
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(4);
+    try heap.init(4);
 
     const a = heap.allocate(64, 16) orelse return error.TestUnexpectedResult;
     const b = heap.allocate(64, 16) orelse return error.TestUnexpectedResult;
@@ -351,7 +357,7 @@ test "Heap 07: deallocation performs backward coalescing and bidirectional three
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(4);
+    try heap.init(4);
 
     const a = heap.allocate(64, 16) orelse return error.TestUnexpectedResult;
     const b = heap.allocate(64, 16) orelse return error.TestUnexpectedResult;
@@ -400,7 +406,7 @@ test "Heap 08: freeing and reusing a block reclaims capacity without extra page 
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(4);
+    try heap.init(4);
 
     const p1 = heap.allocate(256, 16) orelse return error.TestUnexpectedResult;
     const p2 = heap.allocate(256, 16) orelse return error.TestUnexpectedResult;
@@ -426,7 +432,7 @@ test "Heap 09: multiple concurrent allocations maintain payload isolation and ca
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(4);
+    try heap.init(4);
 
     const specs = [_]struct { size: usize, alignment: usize, tag: u8 }{
         .{ .size = 32, .alignment = 16, .tag = 0x11 },
@@ -469,7 +475,7 @@ test "Heap 10: heap expansion dynamically maps multiple additional pages on dema
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(1); // Only 4056 bytes initially
+    try heap.init(1); // Only 4056 bytes initially
     try testing.expectEqual(@as(usize, 1), fake.mapped_pages);
 
     const small = heap.allocate(2048, 16) orelse return error.TestUnexpectedResult;
@@ -497,7 +503,7 @@ test "Heap 11: partial page-mapping failure preserves already mapped pages and l
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(2); // Pages 0..1 mapped
+    try heap.init(2); // Pages 0..1 mapped
 
     const held = heap.allocate(6000, 16) orelse return error.TestUnexpectedResult;
     @memset(held[0..6000], 0x81);
@@ -536,7 +542,7 @@ test "Heap 12: heap capacity exhaustion fails gracefully and recovers on free" {
     // so allocate's minimum 4-page expansion reaches capped_max cleanly on the second growth.
     const capped_max = 6 * PAGE_SIZE;
     var heap = HeapAllocator.create(fake.baseVaddr(), capped_max, fake.pageMapper());
-    heap.init(2);
+    try heap.init(2);
 
     const a = heap.allocate(7000, 16) orelse return error.TestUnexpectedResult;
     @memset(a[0..7000], 0x51);
@@ -571,7 +577,7 @@ test "Heap 13: deallocate validates address bounds, corrupt headers, and repeate
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(2);
+    try heap.init(2);
 
     const p1 = heap.allocate(64, 16) orelse return error.TestUnexpectedResult;
     const p2 = heap.allocate(64, 16) orelse return error.TestUnexpectedResult;
@@ -600,7 +606,7 @@ test "Heap 14: byte accounting and std.mem.Allocator vtable stay consistent acro
     defer fake.deinit();
 
     var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
-    heap.init(4);
+    try heap.init(4);
 
     const std_alloc = heap.allocator();
     const slice = try std_alloc.alloc(u32, 256);
@@ -627,5 +633,313 @@ test "Heap 14: byte accounting and std.mem.Allocator vtable stay consistent acro
     try testing.expectEqual(heap.total_allocated_bytes, heap.total_freed_bytes);
     try testing.expectEqual(@as(usize, 1), countBlocks(&heap));
     try testing.expectEqual(heap.mappedBytes() - HEADER_SIZE, heap.head_block.?.size);
+    try assertListInvariants(&heap);
+}
+
+test "Heap 15: F-06 rejects interior, prefix padding, header, and tail-slack pointers without mutation" {
+    // Part A: split block with non-zero alignment prefix padding
+    {
+        var fake = try FakeHeapBackend.init(testing.allocator, 8);
+        defer fake.deinit();
+
+        var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+        try heap.init(2);
+
+        const p1 = heap.allocate(64, 16) orelse return error.TestUnexpectedResult;
+        const p2 = heap.allocate(128, 64) orelse return error.TestUnexpectedResult;
+        const p3 = heap.allocate(64, 16) orelse return error.TestUnexpectedResult;
+        @memset(p2[0..128], 0xAB);
+
+        const blk2 = try findBlockForPtr(&heap, p2);
+        try testing.expect(blk2.align_offset >= 16);
+
+        const p2_addr = @intFromPtr(p2);
+        const freed_before = heap.total_freed_bytes;
+        const blocks_before = countBlocks(&heap);
+
+        try testing.expectError(error.BlockHeaderNotFound, heap.deallocate(@ptrFromInt(p2_addr - 8)));
+        try testing.expectError(error.BlockHeaderNotFound, heap.deallocate(@ptrFromInt(@intFromPtr(blk2) + 8)));
+        try testing.expectError(error.BlockHeaderNotFound, heap.deallocate(@ptrFromInt(p2_addr + 1)));
+        try testing.expectError(error.BlockHeaderNotFound, heap.deallocate(@ptrFromInt(p2_addr + 64)));
+        try testing.expectError(error.BlockHeaderNotFound, heap.deallocate(@ptrFromInt(p2_addr + 128)));
+
+        // Failed frees must not mutate state or corrupt live payload.
+        try testing.expectEqual(freed_before, heap.total_freed_bytes);
+        try testing.expectEqual(blocks_before, countBlocks(&heap));
+        try testing.expect(!blk2.is_free);
+        try testing.expectEqual(MAGIC_USED, blk2.magic);
+        for (p2[0..128]) |byte| {
+            try testing.expectEqual(@as(u8, 0xAB), byte);
+        }
+
+        // Corrupt align_offset bounds check
+        const saved_offset = blk2.align_offset;
+        blk2.align_offset = @intCast(blk2.size + 1);
+        try testing.expectError(error.CorruptBlockHeader, heap.deallocate(p2));
+        blk2.align_offset = saved_offset;
+
+        try heap.deallocate(p2);
+        try heap.deallocate(p1);
+        try heap.deallocate(p3);
+        try testing.expectEqual(heap.total_allocated_bytes, heap.total_freed_bytes);
+        try assertListInvariants(&heap);
+    }
+
+    // Part B: unsplit block containing tail slack after user payload
+    {
+        var fake = try FakeHeapBackend.init(testing.allocator, 4);
+        defer fake.deinit();
+
+        var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+        try heap.init(1); // 4056 usable bytes in single free block
+
+        // payload_start = base + 40; align 64 yields align_offset = 24, total_needed = 4024,
+        // leaving excess = 32 <= HEADER_SIZE + 32 so the block is NOT split.
+        const p_slack = heap.allocate(4000, 64) orelse return error.TestUnexpectedResult;
+        const blk = try findBlockForPtr(&heap, p_slack);
+        try testing.expectEqual(@as(usize, 1), countBlocks(&heap));
+        try testing.expectEqual(PAGE_SIZE - HEADER_SIZE, blk.size);
+        try testing.expect(blk.align_offset >= 16);
+        try testing.expect(blk.size - @as(usize, blk.align_offset) >= 4032);
+
+        const p_addr = @intFromPtr(p_slack);
+        try testing.expectError(error.BlockHeaderNotFound, heap.deallocate(@ptrFromInt(p_addr - 8)));
+        try testing.expectError(error.BlockHeaderNotFound, heap.deallocate(@ptrFromInt(p_addr + 1)));
+        try testing.expectError(error.BlockHeaderNotFound, heap.deallocate(@ptrFromInt(p_addr + 4016)));
+
+        try heap.deallocate(p_slack);
+        try testing.expectEqual(@as(u32, 0), heap.head_block.?.align_offset);
+        try testing.expectEqual(heap.total_allocated_bytes, heap.total_freed_bytes);
+        try assertListInvariants(&heap);
+    }
+}
+
+test "Heap 16: F-11 expansion accounts for alignment padding and coalescing free tail" {
+    // Case A: 16336 bytes at 64-byte alignment requires 5 new pages (40 + 24 + 16336 = 16400 > 4 * 4096).
+    {
+        var fake = try FakeHeapBackend.init(testing.allocator, 8);
+        defer fake.deinit();
+
+        var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+        try heap.init(1);
+
+        // Consume page 0 without leaving a coalescing free tail.
+        const p0 = heap.allocate(4000, 16) orelse return error.TestUnexpectedResult;
+        const p1 = heap.allocate(16336, 64) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(usize, 0), @intFromPtr(p1) % 64);
+        try testing.expectEqual(@as(usize, 6), fake.mapped_pages);
+        @memset(p1[0..16336], 0x5A);
+        for (p1[0..16336]) |byte| {
+            try testing.expectEqual(@as(u8, 0x5A), byte);
+        }
+
+        try fake.expectUnmappedPoisonedFrom(6);
+        try assertListInvariants(&heap);
+
+        try heap.deallocate(p1);
+        try heap.deallocate(p0);
+        try testing.expectEqual(heap.total_allocated_bytes, heap.total_freed_bytes);
+        try assertListInvariants(&heap);
+    }
+
+    // Case B: 16320 bytes at 128-byte alignment crosses 4-page boundary due to alignment padding (40 + 88 + 16320 = 16448).
+    {
+        var fake = try FakeHeapBackend.init(testing.allocator, 8);
+        defer fake.deinit();
+
+        var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+        try heap.init(1);
+
+        const p0 = heap.allocate(4000, 16) orelse return error.TestUnexpectedResult;
+        const p1 = heap.allocate(16320, 128) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(usize, 0), @intFromPtr(p1) % 128);
+        try testing.expectEqual(@as(usize, 6), fake.mapped_pages);
+        @memset(p1[0..16320], 0xC3);
+
+        try heap.deallocate(p1);
+        try heap.deallocate(p0);
+        try testing.expectEqual(heap.total_allocated_bytes, heap.total_freed_bytes);
+        try assertListInvariants(&heap);
+    }
+
+    // Case C: coalescing free tail allows allocation within exact tight capacity (1 new page instead of 2).
+    {
+        var fake = try FakeHeapBackend.init(testing.allocator, 2);
+        defer fake.deinit();
+
+        var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+        try heap.init(1); // 4056 free, 1 remaining page
+
+        const p0 = heap.allocate(2000, 16) orelse return error.TestUnexpectedResult; // leaves ~2016-byte coalescing tail
+        const p1 = heap.allocate(5000, 16) orelse return error.TestUnexpectedResult; // needs 1 new page with tail, 2 without
+        try testing.expectEqual(@as(usize, 2), fake.mapped_pages);
+        try testing.expectEqual(@as(usize, 0), fake.map_failures);
+        @memset(p1[0..5000], 0x33);
+
+        try heap.deallocate(p1);
+        try heap.deallocate(p0);
+        try testing.expectEqual(@as(usize, 1), countBlocks(&heap));
+        try testing.expectEqual(heap.mappedBytes() - HEADER_SIZE, heap.head_block.?.size);
+        try assertListInvariants(&heap);
+    }
+}
+
+test "Heap 17: F-11 clamps expansion batch to remaining headroom and handles partial expansion cleanly" {
+    // Part A: 2-page headroom succeeds when batch size (4) exceeds remaining_pages (2).
+    {
+        var fake = try FakeHeapBackend.init(testing.allocator, 4);
+        defer fake.deinit();
+
+        var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+        try heap.init(2);
+
+        const p0 = heap.allocate(8100, 16) orelse return error.TestUnexpectedResult;
+        const p1 = heap.allocate(4096, 16) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(usize, 4), fake.mapped_pages);
+        try testing.expectEqual(@as(usize, 0), fake.map_failures);
+        try testing.expect(!fake.unexpected_addr);
+
+        try heap.deallocate(p1);
+        try heap.deallocate(p0);
+        try assertListInvariants(&heap);
+    }
+
+    // Part B: partial expansion (2 of 4 requested batch pages) still satisfies a 2-page allocation once.
+    {
+        var fake = try FakeHeapBackend.init(testing.allocator, 8);
+        defer fake.deinit();
+
+        var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+        try heap.init(1);
+
+        const p0 = heap.allocate(4000, 16) orelse return error.TestUnexpectedResult;
+        fake.fail_after_pages = 3; // allow pages 1..2 during batch=4, fail on page 3
+
+        const p1 = heap.allocate(6000, 16) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(usize, 3), fake.mapped_pages);
+        try testing.expectEqual(@as(usize, 1), fake.map_failures);
+        @memset(p1[0..6000], 0x91);
+
+        try heap.deallocate(p1);
+        try heap.deallocate(p0);
+        try assertListInvariants(&heap);
+    }
+
+    // Part C: insufficient partial expansion returns null without recursion and preserves mapped free block.
+    {
+        var fake = try FakeHeapBackend.init(testing.allocator, 8);
+        defer fake.deinit();
+
+        var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+        try heap.init(1);
+
+        const p0 = heap.allocate(4000, 16) orelse return error.TestUnexpectedResult;
+        fake.fail_after_pages = 2; // allow only 1 expansion page when 2 are needed
+
+        try testing.expect(heap.allocate(6000, 16) == null);
+        try testing.expectEqual(@as(usize, 2), fake.mapped_pages);
+        try testing.expectEqual(@as(usize, 1), fake.map_failures);
+
+        // Smaller request must reuse the newly mapped page without requiring another map call.
+        const p1 = heap.allocate(3000, 16) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(usize, 2), fake.mapped_pages);
+
+        try heap.deallocate(p1);
+        try heap.deallocate(p0);
+        try assertListInvariants(&heap);
+    }
+}
+
+test "Heap 18: F-11 init validates page count, rejects uninitialized allocations, and safely resumes partial init" {
+    var fake = try FakeHeapBackend.init(testing.allocator, 8);
+    defer fake.deinit();
+
+    var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+
+    try testing.expectError(error.InvalidInitialPageCount, heap.init(0));
+    try testing.expect(!heap.initialized);
+    try testing.expectEqual(@as(usize, 0), fake.map_calls);
+    try testing.expect(heap.allocate(64, 16) == null);
+
+    try testing.expectError(error.CapacityExceeded, heap.init(9));
+    try testing.expect(!heap.initialized);
+    try testing.expectEqual(@as(usize, 0), fake.map_calls);
+    try testing.expect(heap.allocate(64, 16) == null);
+
+    // Total map failure on page 0
+    fake.fail_after_pages = 0;
+    try testing.expectError(error.ExpansionFailed, heap.init(4));
+    try testing.expect(!heap.initialized);
+    try testing.expectEqual(@as(usize, 0), fake.mapped_pages);
+    try testing.expect(heap.allocate(64, 16) == null);
+
+    // Partial map failure after 2 of 4 pages keeps state coherent and uninitialized.
+    fake.fail_after_pages = 2;
+    try testing.expectError(error.ExpansionFailed, heap.init(4));
+    try testing.expect(!heap.initialized);
+    try testing.expectEqual(@as(usize, 2), fake.mapped_pages);
+    try testing.expectEqual(@as(u64, 2 * PAGE_SIZE), heap.mappedBytes());
+    try testing.expect(heap.head_block != null);
+    try testing.expect(!fake.unexpected_addr);
+    try testing.expect(heap.allocate(64, 16) == null);
+    try assertListInvariants(&heap);
+
+    // Retry must map only pages 2..3 without remapping pages 0..1.
+    fake.fail_after_pages = null;
+    try heap.init(4);
+    try testing.expect(heap.initialized);
+    try testing.expect(!fake.unexpected_addr);
+    try testing.expectEqual(@as(usize, 4), fake.mapped_pages);
+    for (0..4) |i| {
+        try testing.expectEqual(fake.baseVaddr() + @as(u64, i) * PAGE_SIZE, fake.mapped_addrs[i]);
+    }
+    try testing.expectEqual(@as(usize, 1), countBlocks(&heap));
+    try testing.expectEqual(@as(u64, 4 * PAGE_SIZE - HEADER_SIZE), heap.head_block.?.size);
+
+    const p = heap.allocate(128, 32) orelse return error.TestUnexpectedResult;
+    try heap.deallocate(p);
+    try assertListInvariants(&heap);
+}
+
+test "Heap 19: F-12 validates alignment and size overflow without mutating heap state" {
+    var fake = try FakeHeapBackend.init(testing.allocator, 8);
+    defer fake.deinit();
+
+    var heap = HeapAllocator.create(fake.baseVaddr(), fake.maxSize(), fake.pageMapper());
+    try heap.init(2);
+
+    // Valid power-of-two alignments (both < 16 and >= 16) succeed with required alignment.
+    const valid_aligns = [_]usize{ 1, 2, 4, 8, 16, 32, 64, 256 };
+    for (valid_aligns) |a| {
+        const ptr = heap.allocate(64, a) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(usize, 0), @intFromPtr(ptr) % @max(a, 16));
+        try heap.deallocate(ptr);
+    }
+
+    const mapped_before = fake.mapped_pages;
+    const calls_before = fake.map_calls;
+    const alloc_before = heap.total_allocated_bytes;
+    const freed_before = heap.total_freed_bytes;
+    const end_before = heap.current_heap_end;
+    const blocks_before = countBlocks(&heap);
+
+    // Invalid size and alignment inputs must fail with zero side effects.
+    try testing.expect(heap.allocate(0, 16) == null);
+    try testing.expect(heap.allocate(std.math.maxInt(usize), 16) == null);
+    try testing.expect(heap.allocate(std.math.maxInt(usize) - 7, 16) == null);
+    try testing.expect(heap.allocate(64, 0) == null);
+    try testing.expect(heap.allocate(64, 3) == null);
+    try testing.expect(heap.allocate(64, 24) == null);
+    try testing.expect(heap.allocate(64, @intCast(fake.maxSize() * 2)) == null);
+    try testing.expect(heap.allocate(@intCast(fake.maxSize()), 16) == null);
+    try testing.expect(heap.allocate(@intCast(fake.maxSize() - HEADER_SIZE + 16), 16) == null);
+
+    try testing.expectEqual(mapped_before, fake.mapped_pages);
+    try testing.expectEqual(calls_before, fake.map_calls);
+    try testing.expectEqual(alloc_before, heap.total_allocated_bytes);
+    try testing.expectEqual(freed_before, heap.total_freed_bytes);
+    try testing.expectEqual(end_before, heap.current_heap_end);
+    try testing.expectEqual(blocks_before, countBlocks(&heap));
+    try fake.expectUnmappedPoisonedFrom(2);
     try assertListInvariants(&heap);
 }
