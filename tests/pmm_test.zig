@@ -124,15 +124,32 @@ fn assertInvariants(pmm: *const PhysicalAllocator) !void {
     try testing.expectEqual(pmm.free_pages, bitmap_free);
 }
 
+fn expectFreeUnchanged(
+    pmm: *PhysicalAllocator,
+    expected_err: physical_core.FreeError,
+    call_res: physical_core.FreeError!void,
+    prev_bitmap: []const u8,
+    prev_used: usize,
+    prev_free: usize,
+    prev_cursor: usize,
+) !void {
+    try testing.expectError(expected_err, call_res);
+    try testing.expectEqual(prev_used, pmm.used_pages);
+    try testing.expectEqual(prev_free, pmm.free_pages);
+    try testing.expectEqual(prev_cursor, pmm.last_scanned_byte);
+    try testing.expectEqualSlices(u8, prev_bitmap, pmm.bitmap);
+    try assertInvariants(pmm);
+}
+
 test "PMM initialization with synthetic memory map reserves <1MiB, non-usable, and bitmap pages" {
     var backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 32, 512);
     defer backend.deinit();
 
     const regions = [_]MemoryRegion{
         .{ .base = 0x0, .length = 0x80000, .kind = .usable },
-        .{ .base = 0x100000, .length = 16 * PAGE_SIZE, .kind = .non_usable },
+        .{ .base = 0x100000, .length = 16 * PAGE_SIZE, .kind = .bootloader_reclaimable },
         .{ .base = 0x110000, .length = 16 * PAGE_SIZE, .kind = .usable },
-        .{ .base = 0x120000, .length = 4 * PAGE_SIZE, .kind = .non_usable },
+        .{ .base = 0x120000, .length = 4 * PAGE_SIZE, .kind = .executable_and_modules },
     };
 
     var pmm: PhysicalAllocator = .{};
@@ -144,6 +161,7 @@ test "PMM initialization with synthetic memory map reserves <1MiB, non-usable, a
     try testing.expectEqual(@as(?u64, 0x110000), backend.acquired_bitmap_phys);
     try testing.expectEqual(@as(usize, 37), backend.acquired_bitmap_size);
     try testing.expectEqual(@as(u64, 0x110000), pmm.bitmap_phys);
+    try testing.expectEqual(@as(u64, 0x111000), pmm.bitmap_end_phys);
 
     try testing.expect(pmm.isPageAllocated(0x0));
     try testing.expect(pmm.isPageAllocated(0x1000));
@@ -170,16 +188,20 @@ test "PMM initialization with synthetic memory map reserves <1MiB, non-usable, a
 }
 
 test "PMM initialization failure paths preserve pre-existing state" {
-    var backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 16, 8);
+    var backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 16, 64);
     defer backend.deinit();
 
     const valid_regions = [_]MemoryRegion{
-        .{ .base = 0x1000, .length = 4 * PAGE_SIZE, .kind = .usable },
+        .{ .base = 0x100000, .length = 4 * PAGE_SIZE, .kind = .usable },
     };
     var pmm: PhysicalAllocator = .{};
     try pmm.initFromSlice(&valid_regions, backend.bitmapProvider(), backend.pageZeroer());
     const prev_total = pmm.total_pages;
     const prev_highest = pmm.highest_address;
+    const prev_bitmap_phys = pmm.bitmap_phys;
+
+    // Allocate one page so we can verify failure paths do not clobber retained regions or state.
+    const held = pmm.allocPage() orelse return error.TestUnexpectedResult;
 
     try testing.expectError(
         error.NoUsableBitmapRegion,
@@ -187,36 +209,47 @@ test "PMM initialization failure paths preserve pre-existing state" {
     );
     try testing.expectEqual(prev_total, pmm.total_pages);
     try testing.expectEqual(prev_highest, pmm.highest_address);
+    try testing.expectEqual(prev_bitmap_phys, pmm.bitmap_phys);
 
-    const zero_base_regions = [_]MemoryRegion{
-        .{ .base = 0x0, .length = 0x20000, .kind = .usable },
-        .{ .base = 0x100000, .length = 0x20000, .kind = .non_usable },
+    const sub_1mib_regions = [_]MemoryRegion{
+        .{ .base = 0x1000, .length = 0x20000, .kind = .usable },
+        .{ .base = 0x100000, .length = 0x20000, .kind = .reserved },
     };
     try testing.expectError(
         error.NoUsableBitmapRegion,
-        pmm.initFromSlice(&zero_base_regions, backend.bitmapProvider(), backend.pageZeroer()),
+        pmm.initFromSlice(&sub_1mib_regions, backend.bitmapProvider(), backend.pageZeroer()),
     );
+    try testing.expectEqual(prev_total, pmm.total_pages);
+    try testing.expectEqual(prev_highest, pmm.highest_address);
 
+    // Trigger BitmapBackingTooSmall cleanly by using a 8-byte-capable provider on a 16-MiB map.
+    var tiny_backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 4, 8);
+    defer tiny_backend.deinit();
     const large_regions = [_]MemoryRegion{
         .{ .base = 0x100000, .length = 16 * PAGE_SIZE, .kind = .usable },
     };
     try testing.expectError(
         error.BitmapBackingTooSmall,
-        pmm.initFromSlice(&large_regions, backend.bitmapProvider(), backend.pageZeroer()),
+        pmm.initFromSlice(&large_regions, tiny_backend.bitmapProvider(), tiny_backend.pageZeroer()),
     );
     try testing.expectEqual(prev_total, pmm.total_pages);
+    try testing.expectEqual(prev_bitmap_phys, pmm.bitmap_phys);
+    try assertInvariants(&pmm);
+
+    // Confirm retained slice still points to valid_regions after failed re-inits.
+    try pmm.freePage(held);
     try assertInvariants(&pmm);
 }
 
 test "PMM multi-page bitmap reserves all bitmap physical frames" {
-    // Highest address = 160 MiB -> 40,960 pages -> 5,120-byte bitmap (occupies 2 frames).
-    const highest_mmio_end: u64 = 160 * 1024 * 1024;
+    // Highest RAM-backed address = 160 MiB -> 40,960 pages -> 5,120-byte bitmap (occupies 2 frames).
+    const highest_ram_end: u64 = 160 * 1024 * 1024;
     var backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 8, 8192);
     defer backend.deinit();
 
     const regions = [_]MemoryRegion{
         .{ .base = 0x100000, .length = 8 * PAGE_SIZE, .kind = .usable },
-        .{ .base = highest_mmio_end - PAGE_SIZE, .length = PAGE_SIZE, .kind = .non_usable },
+        .{ .base = highest_ram_end - PAGE_SIZE, .length = PAGE_SIZE, .kind = .executable_and_modules },
     };
 
     var pmm: PhysicalAllocator = .{};
@@ -224,6 +257,8 @@ test "PMM multi-page bitmap reserves all bitmap physical frames" {
 
     try testing.expectEqual(@as(usize, 40960), pmm.total_pages);
     try testing.expectEqual(@as(usize, 5120), pmm.bitmap.len);
+    try testing.expectEqual(@as(u64, 0x100000), pmm.bitmap_phys);
+    try testing.expectEqual(@as(u64, 0x102000), pmm.bitmap_end_phys);
     try testing.expect(pmm.isPageAllocated(0x100000));
     try testing.expect(pmm.isPageAllocated(0x101000));
     try testing.expectEqual(@as(usize, 6), pmm.free_pages);
@@ -388,21 +423,28 @@ test "PMM out-of-memory preserves state and recovers after free" {
 test "PMM boundary conditions: zero/one allocPages and partial final bitmap words/bytes" {
     const counts = [_]usize{ 7, 8, 9, 15, 16, 17, 63, 64, 65, 71, 72, 73 };
 
-    // 1. Sub-1MiB total frame counts strictly equal to word/byte/bit boundaries.
-    for (counts) |frame_count| {
-        var backend = try FakeMemoryBackend.init(testing.allocator, 0x1000, frame_count, 64);
+    // 1. All-used partial final bitmap words/bytes strictly above 1 MiB (bitmap takes the single usable page).
+    for (counts) |tail_frames| {
+        const expected_total = 256 + tail_frames;
+        var backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 1, 64);
         defer backend.deinit();
 
         const regions = [_]MemoryRegion{
-            .{ .base = 0x1000, .length = @as(u64, @intCast(frame_count - 1)) * PAGE_SIZE, .kind = .usable },
+            .{ .base = 0x100000, .length = PAGE_SIZE, .kind = .usable },
+            .{
+                .base = 0x101000,
+                .length = @as(u64, @intCast(tail_frames - 1)) * PAGE_SIZE,
+                .kind = .bootloader_reclaimable,
+            },
         };
 
         var pmm: PhysicalAllocator = .{};
         try pmm.initFromSlice(&regions, backend.bitmapProvider(), backend.pageZeroer());
-        try testing.expectEqual(frame_count, pmm.total_pages);
-        try testing.expectEqual((frame_count + 7) / 8, pmm.bitmap.len);
+        try testing.expectEqual(expected_total, pmm.total_pages);
+        try testing.expectEqual((expected_total + 7) / 8, pmm.bitmap.len);
+        try testing.expectEqual(@as(u64, 0x100000), pmm.bitmap_phys);
         try testing.expectEqual(@as(usize, 0), pmm.free_pages);
-        try testing.expectEqual(frame_count, pmm.used_pages);
+        try testing.expectEqual(expected_total, pmm.used_pages);
         try testing.expectEqual(@as(?u64, null), pmm.allocPage());
         try assertInvariants(&pmm);
     }
@@ -515,10 +557,10 @@ test "PMM deterministic stress sequence maintains exact bitmap and counter invar
     var pmm: PhysicalAllocator = .{};
     try pmm.initFromSlice(&regions, backend.bitmapProvider(), backend.pageZeroer());
     const initial_free = pmm.free_pages;
-    // Region 0 (`0x1000`, `< 1 MiB`, length `0x10000 >= 36`) hosts the bitmap per existing F-16 placement rules,
-    // leaving all 32 frames at `0x100000` free while keeping `< 1 MiB` reserved.
-    try testing.expectEqual(@as(u64, 0x1000), pmm.bitmap_phys);
-    try testing.expectEqual(@as(usize, 32), initial_free);
+    // Region 0 (`0x1000`, `< 1 MiB`) is skipped per F-16; the bitmap is placed at `0x100000`,
+    // leaving 31 frames at `0x101000..0x120000` free while keeping `< 1 MiB` reserved.
+    try testing.expectEqual(@as(u64, 0x100000), pmm.bitmap_phys);
+    try testing.expectEqual(@as(usize, 31), initial_free);
     try assertInvariants(&pmm);
 
     var held: [32]?u64 = @splat(null);
@@ -570,4 +612,438 @@ test "PMM deterministic stress sequence maintains exact bitmap and counter invar
     try testing.expectEqual(initial_free, pmm.free_pages);
     try testing.expect(!backend.out_of_range_zero);
     try testing.expect(!backend.unaligned_zero);
+}
+
+test "F-07: high reserved, framebuffer, acpi_nvs, bad_memory, reserved_mapped, and unknown apertures do not inflate ceiling" {
+    // RAM: [0x100000, 0x10100000) (256 MiB usable) -> ceiling = 0x10100000 -> 65,792 pages -> 8,224-byte bitmap (3 pages).
+    var backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 16, 16384);
+    defer backend.deinit();
+
+    const regions = [_]MemoryRegion{
+        .{ .base = 0x0, .length = 0x100000, .kind = .reserved },
+        .{ .base = 0x100000, .length = 256 * 1024 * 1024, .kind = .usable },
+        .{ .base = 0x1_0000_0000, .length = 0x10000, .kind = .unknown },
+        .{ .base = 0x2_0000_0000, .length = 0x10000, .kind = .reserved_mapped },
+        .{ .base = 0x4_0000_0000, .length = 0x10000, .kind = .bad_memory },
+        .{ .base = 0x8_0000_0000, .length = 0x20000, .kind = .acpi_nvs },
+        .{ .base = 0x10_0000_0000, .length = 0x400000, .kind = .framebuffer },
+        .{ .base = 0x4000_0000_0000, .length = 0x100000, .kind = .reserved }, // 64 TiB PCIe MMIO aperture
+    };
+
+    var pmm: PhysicalAllocator = .{};
+    try pmm.initFromSlice(&regions, backend.bitmapProvider(), backend.pageZeroer());
+
+    try testing.expectEqual(@as(u64, 0x10100000), pmm.highest_address);
+    try testing.expectEqual(@as(usize, 65792), pmm.total_pages);
+    try testing.expectEqual(@as(usize, 8224), pmm.bitmap.len);
+    try testing.expectEqual(@as(u64, 0x100000), pmm.bitmap_phys);
+    try testing.expectEqual(@as(u64, 0x103000), pmm.bitmap_end_phys);
+    try testing.expectEqual(@as(usize, 65536), pmm.usable_pages);
+    try testing.expectEqual(@as(usize, 65533), pmm.free_pages);
+    try testing.expectEqual(@as(usize, 259), pmm.used_pages);
+    try assertInvariants(&pmm);
+
+    // First allocatable frame immediately follows the 3-page bitmap backing [0x100000, 0x103000).
+    const first = pmm.allocPage() orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u64, 0x103000), first);
+    try expectAllZero(backend.pageSlice(first, 1));
+    try pmm.freePage(first);
+    try testing.expectError(error.OutOfBounds, pmm.freePage(0x4000_0000_0000));
+    try testing.expectError(error.OutOfBounds, pmm.freePage(0x10_0000_0000));
+    try assertInvariants(&pmm);
+
+    // Also verify high excluded regions cannot inflate ceiling when RAM ceiling is exact 256 MiB (0x10000000).
+    const exact_256_regions = [_]MemoryRegion{
+        .{ .base = 0x0, .length = 0x100000, .kind = .reserved },
+        .{ .base = 0x100000, .length = 255 * 1024 * 1024, .kind = .usable },
+        .{ .base = 0x80_0000_0000, .length = 0x200000, .kind = .framebuffer },
+        .{ .base = 0x4000_0000_0000, .length = 0x100000, .kind = .reserved },
+    };
+    try pmm.initFromSlice(&exact_256_regions, backend.bitmapProvider(), backend.pageZeroer());
+    try testing.expectEqual(@as(u64, 0x10000000), pmm.highest_address);
+    try testing.expectEqual(@as(usize, 65536), pmm.total_pages);
+    try testing.expectEqual(@as(usize, 8192), pmm.bitmap.len);
+    try testing.expectEqual(@as(u64, 0x100000), pmm.bitmap_phys);
+    try testing.expectEqual(@as(u64, 0x102000), pmm.bitmap_end_phys);
+    try assertInvariants(&pmm);
+}
+
+test "F-07: RAM-backed reclaimable/kernel types raise ceiling while all non-usable entries remain unallocatable" {
+    // Usable spans [0x100000..0x104000) and [0x108000..0x10A000) (6 pages total);
+    // interleaved non-usable types stay reserved and never returned by allocPage().
+    var backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 32, 512);
+    defer backend.deinit();
+
+    const regions = [_]MemoryRegion{
+        .{ .base = 0x100000, .length = 4 * PAGE_SIZE, .kind = .usable }, // 0x100000..0x104000
+        .{ .base = 0x104000, .length = PAGE_SIZE, .kind = .reserved },
+        .{ .base = 0x105000, .length = PAGE_SIZE, .kind = .framebuffer },
+        .{ .base = 0x106000, .length = PAGE_SIZE, .kind = .acpi_nvs },
+        .{ .base = 0x107000, .length = PAGE_SIZE, .kind = .bad_memory },
+        .{ .base = 0x108000, .length = 2 * PAGE_SIZE, .kind = .usable }, // 0x108000..0x10A000
+        .{ .base = 0x10A000, .length = PAGE_SIZE, .kind = .reserved_mapped },
+        .{ .base = 0x10B000, .length = PAGE_SIZE, .kind = .unknown },
+        .{ .base = 0x10C000, .length = 2 * PAGE_SIZE, .kind = .bootloader_reclaimable },
+        .{ .base = 0x10E000, .length = 2 * PAGE_SIZE, .kind = .acpi_reclaimable },
+        .{ .base = 0x110000, .length = 4 * PAGE_SIZE, .kind = .executable_and_modules },
+        .{ .base = 0x2000_0000, .length = 0x100000, .kind = .reserved },
+    };
+
+    var pmm: PhysicalAllocator = .{};
+    try pmm.initFromSlice(&regions, backend.bitmapProvider(), backend.pageZeroer());
+
+    // Ceiling is top of `.executable_and_modules` (0x114000 -> 276 pages -> 35-byte bitmap), ignoring 0x2000_0000 `.reserved`.
+    try testing.expectEqual(@as(u64, 0x114000), pmm.highest_address);
+    try testing.expectEqual(@as(usize, 276), pmm.total_pages);
+    try testing.expectEqual(@as(usize, 35), pmm.bitmap.len);
+    try testing.expectEqual(@as(usize, 6), pmm.usable_pages);
+    try testing.expectEqual(@as(usize, 5), pmm.free_pages);
+
+    const expected_reserved = [_]u64{
+        0x100000, // bitmap
+        0x104000, // .reserved
+        0x105000, // .framebuffer
+        0x106000, // .acpi_nvs
+        0x107000, // .bad_memory
+        0x10A000, // .reserved_mapped
+        0x10B000, // .unknown
+        0x10C000, // .bootloader_reclaimable
+        0x10D000,
+        0x10E000, // .acpi_reclaimable
+        0x10F000,
+        0x110000, // .executable_and_modules
+        0x111000,
+        0x112000,
+        0x113000,
+    };
+    for (expected_reserved) |addr| {
+        try testing.expect(pmm.isPageAllocated(addr));
+    }
+
+    // Drain every single free page and confirm exact usable pages only (never reclaimable or kernel frames).
+    const expected_allocs = [_]u64{ 0x101000, 0x102000, 0x103000, 0x108000, 0x109000 };
+    for (expected_allocs) |expected_paddr| {
+        const allocated = pmm.allocPage() orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(expected_paddr, allocated);
+        try expectAllZero(backend.pageSlice(allocated, 1));
+    }
+    try testing.expectEqual(@as(?u64, null), pmm.allocPage());
+    try testing.expect(!backend.out_of_range_zero);
+    try assertInvariants(&pmm);
+}
+
+test "F-08: freePage enforces low-memory (<1MiB), page-rounded bitmap overlap, and usable-region boundaries" {
+    // 256 MiB ceiling starting at 0x100000 creates a 3-page bitmap [0x100000, 0x103000) where page 3 holds 32 bytes.
+    // Interleave RAM regions plus an unmapped gap and unaligned `.usable` region near 0x103000..0x110000.
+    var backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 16, 16384);
+    defer backend.deinit();
+
+    const regions = [_]MemoryRegion{
+        // Usable region covering <1MiB as well as the 3-page bitmap and usable frame 0x103000.
+        .{ .base = 0x0, .length = 0x104000, .kind = .usable },
+        .{ .base = 0x104000, .length = PAGE_SIZE, .kind = .reserved },
+        .{ .base = 0x105000, .length = PAGE_SIZE, .kind = .bootloader_reclaimable },
+        .{ .base = 0x106000, .length = PAGE_SIZE, .kind = .executable_and_modules },
+        .{ .base = 0x107000, .length = PAGE_SIZE, .kind = .acpi_reclaimable },
+        .{ .base = 0x108000, .length = PAGE_SIZE, .kind = .acpi_nvs },
+        .{ .base = 0x109000, .length = PAGE_SIZE, .kind = .bad_memory },
+        .{ .base = 0x10A000, .length = PAGE_SIZE, .kind = .framebuffer },
+        .{ .base = 0x10B000, .length = PAGE_SIZE, .kind = .reserved_mapped },
+        .{ .base = 0x10C000, .length = PAGE_SIZE, .kind = .unknown },
+        // Gap at 0x10D000..0x10E000 (not listed in memory map).
+        // Unaligned `.usable` [0x10E800, 0x111800) => only 0x10F000 and 0x110000 are wholly contained frames.
+        .{ .base = 0x10E800, .length = 0x3000, .kind = .usable },
+        // Push RAM ceiling up to 0x10100000 so bitmap is 8,224 bytes (2 full pages + 32-byte partial 3rd page).
+        .{ .base = 0x10000000, .length = 1024 * 1024, .kind = .bootloader_reclaimable },
+    };
+
+    var pmm: PhysicalAllocator = .{};
+    try pmm.initFromSlice(&regions, backend.bitmapProvider(), backend.pageZeroer());
+    try testing.expectEqual(@as(usize, 8224), pmm.bitmap.len);
+    try testing.expectEqual(@as(u64, 0x100000), pmm.bitmap_phys);
+    try testing.expectEqual(@as(u64, 0x103000), pmm.bitmap_end_phys);
+    try testing.expectEqual(@as(usize, 3), pmm.free_pages); // 0x103000, 0x10F000, 0x110000
+
+    // Allocate the 3 valid usable frames so we can test freeing both valid and invalid paths.
+    const page0 = pmm.allocPage() orelse return error.TestUnexpectedResult; // 0x103000
+    const page1 = pmm.allocPage() orelse return error.TestUnexpectedResult; // 0x10F000
+    const page2 = pmm.allocPage() orelse return error.TestUnexpectedResult; // 0x110000
+    try testing.expectEqual(@as(u64, 0x103000), page0);
+    try testing.expectEqual(@as(u64, 0x10F000), page1);
+    try testing.expectEqual(@as(u64, 0x110000), page2);
+
+    const snapshot = try testing.allocator.dupe(u8, pmm.bitmap);
+    defer testing.allocator.free(snapshot);
+    const prev_used = pmm.used_pages;
+    const prev_free = pmm.free_pages;
+    const prev_cursor = pmm.last_scanned_byte;
+
+    // 1. Low-memory addresses (< 1 MiB) must fail with ReservedAddress even when inside `.usable`.
+    const low_addrs = [_]u64{ 0x0, 0x1000, 0x80000, 0xFF000 };
+    for (low_addrs) |addr| {
+        try expectFreeUnchanged(&pmm, error.ReservedAddress, pmm.freePage(addr), snapshot, prev_used, prev_free, prev_cursor);
+    }
+
+    // 2. Every physical frame occupied by page-rounded bitmap [0x100000, 0x103000) fails with BitmapOverlap.
+    const bitmap_frames = [_]u64{ 0x100000, 0x101000, 0x102000 }; // 0x102000 holds only 32 bytes (partial page!)
+    for (bitmap_frames) |addr| {
+        try expectFreeUnchanged(&pmm, error.BitmapOverlap, pmm.freePage(addr), snapshot, prev_used, prev_free, prev_cursor);
+    }
+
+    // 3. Non-usable region types, unmapped gap, and partially-usable boundary frames fail with NotUsableRegion.
+    const non_usable_addrs = [_]u64{
+        0x104000, // .reserved
+        0x105000, // .bootloader_reclaimable
+        0x106000, // .executable_and_modules
+        0x107000, // .acpi_reclaimable
+        0x108000, // .acpi_nvs
+        0x109000, // .bad_memory
+        0x10A000, // .framebuffer
+        0x10B000, // .reserved_mapped
+        0x10C000, // .unknown
+        0x10D000, // unmapped gap
+        0x10E000, // partial start boundary [0x10E800..0x10F000)
+        0x111000, // partial end boundary [0x111000..0x111800)
+    };
+    for (non_usable_addrs) |addr| {
+        try expectFreeUnchanged(&pmm, error.NotUsableRegion, pmm.freePage(addr), snapshot, prev_used, prev_free, prev_cursor);
+    }
+
+    // 4. Valid usable frames can be freed, re-tested for DoubleFree, and reallocated.
+    try pmm.freePage(page0);
+    try pmm.freePage(page1);
+    try pmm.freePage(page2);
+    try testing.expectEqual(@as(usize, 3), pmm.free_pages);
+    try testing.expectError(error.DoubleFree, pmm.freePage(page0));
+    try testing.expectError(error.DoubleFree, pmm.freePage(page1));
+    try assertInvariants(&pmm);
+
+    const reallocated = pmm.allocPage() orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(page0, reallocated);
+    try expectAllZero(backend.pageSlice(reallocated, 1));
+    try assertInvariants(&pmm);
+}
+
+test "F-08: freePages fails atomically with zero bitmap or counter mutations" {
+    var backend = try FakeMemoryBackend.init(testing.allocator, 0xFE000, 12, 8192);
+    defer backend.deinit();
+
+    // Regions create contiguous pages around <1MiB boundary, bitmap, usable block, reserved, and kernel frames:
+    // - 0xFF000..0x100000: <1 MiB usable (reserved)
+    // - 0x100000..0x101000: usable page 0 (allocated -> freed later -> double-free target? No, make page at 0x100000 usable?)
+    // Place bitmap at 0x103000 by putting usable [0x100000, 0x101000) too small (< 2 pages needed) or test before/after bitmap!
+    // Force a 2-page bitmap by putting bootloader_reclaimable high at 160 MiB:
+    // Region 0: usable [0xFE000, 0x101000) => after 1 MiB clamp has ONLY 1 page [0x100000, 0x101000) -> too small for 2-page bitmap!
+    // Region 1: bootloader_reclaimable [0x101000, 0x102000)
+    // Region 2: usable [0x102000, 0x106000) => 4 pages, hosts 2-page bitmap [0x102000, 0x104000), leaving 0x104000 and 0x105000 free!
+    // Region 3: reserved [0x106000, 0x107000)
+    const highest_ram_end: u64 = 160 * 1024 * 1024;
+    const regions = [_]MemoryRegion{
+        .{ .base = 0xFE000, .length = 3 * PAGE_SIZE, .kind = .usable },
+        .{ .base = 0x101000, .length = PAGE_SIZE, .kind = .bootloader_reclaimable },
+        .{ .base = 0x102000, .length = 4 * PAGE_SIZE, .kind = .usable },
+        .{ .base = 0x106000, .length = PAGE_SIZE, .kind = .reserved },
+        .{ .base = highest_ram_end - PAGE_SIZE, .length = PAGE_SIZE, .kind = .executable_and_modules },
+    };
+
+    var pmm: PhysicalAllocator = .{};
+    try pmm.initFromSlice(&regions, backend.bitmapProvider(), backend.pageZeroer());
+    try testing.expectEqual(@as(u64, 0x102000), pmm.bitmap_phys);
+    try testing.expectEqual(@as(u64, 0x104000), pmm.bitmap_end_phys);
+    try testing.expectEqual(@as(usize, 3), pmm.free_pages); // 0x100000, 0x104000, 0x105000
+
+    // Allocate all 3 usable pages: 0x100000 and 0x104000..0x106000.
+    try testing.expectEqual(@as(?u64, 0x100000), pmm.allocPage());
+    const span = pmm.allocPages(2) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u64, 0x104000), span);
+    try testing.expectEqual(@as(usize, 0), pmm.free_pages);
+
+    const snapshot = try testing.allocator.dupe(u8, pmm.bitmap);
+    defer testing.allocator.free(snapshot);
+    const prev_used = pmm.used_pages;
+    const prev_free = pmm.free_pages;
+    const prev_cursor = pmm.last_scanned_byte;
+
+    // Case 1: Usable allocated frames [0x104000, 0x105000] crossing into `.reserved` 0x106000.
+    try expectFreeUnchanged(&pmm, error.NotUsableRegion, pmm.freePages(0x104000, 3), snapshot, prev_used, prev_free, prev_cursor);
+    try testing.expect(pmm.isPageAllocated(0x104000));
+    try testing.expect(pmm.isPageAllocated(0x105000));
+
+    // Case 2: Valid usable 0x100000 crossing `.bootloader_reclaimable` 0x101000 and into bitmap 0x102000.
+    try expectFreeUnchanged(&pmm, error.NotUsableRegion, pmm.freePages(0x100000, 2), snapshot, prev_used, prev_free, prev_cursor);
+    try testing.expect(pmm.isPageAllocated(0x100000));
+
+    // Case 3: Bitmap range [0x102000, 0x104000) crossing into valid usable allocated [0x104000, 0x106000).
+    try expectFreeUnchanged(&pmm, error.BitmapOverlap, pmm.freePages(0x103000, 2), snapshot, prev_used, prev_free, prev_cursor);
+    try expectFreeUnchanged(&pmm, error.BitmapOverlap, pmm.freePages(0x102000, 4), snapshot, prev_used, prev_free, prev_cursor);
+
+    // Case 4: `< 1 MiB` crossing into valid usable 0x100000.
+    try expectFreeUnchanged(&pmm, error.ReservedAddress, pmm.freePages(0xFE000, 3), snapshot, prev_used, prev_free, prev_cursor);
+    try testing.expect(pmm.isPageAllocated(0x100000));
+
+    // Case 5: Overflow count guard & out-of-bounds span from valid allocated top page.
+    try expectFreeUnchanged(&pmm, error.OutOfBounds, pmm.freePages(0x104000, std.math.maxInt(usize)), snapshot, prev_used, prev_free, prev_cursor);
+
+    // Case 6: Free valid span atomically, then confirm crossing allocated->free fails atomically on DoubleFree.
+    try pmm.freePage(0x105000);
+    const snap_one_free = try testing.allocator.dupe(u8, pmm.bitmap);
+    defer testing.allocator.free(snap_one_free);
+    try expectFreeUnchanged(&pmm, error.DoubleFree, pmm.freePages(0x104000, 2), snap_one_free, pmm.used_pages, pmm.free_pages, pmm.last_scanned_byte);
+    try testing.expect(pmm.isPageAllocated(0x104000));
+
+    try pmm.freePage(0x104000);
+    try pmm.freePage(0x100000);
+    try testing.expectEqual(@as(usize, 3), pmm.free_pages);
+    try assertInvariants(&pmm);
+}
+
+test "F-16: bitmap placement strictly enforces >= 1 MiB, alignment, complete multi-page fit, and later fallback" {
+    var backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 32, 16384);
+    defer backend.deinit();
+
+    // 1. Region entirely below 1 MiB (even touching 0x100000 at its exclusive top) is rejected.
+    const strictly_below = [_]MemoryRegion{
+        .{ .base = 0x1000, .length = 0xFF000, .kind = .usable },
+    };
+    var pmm: PhysicalAllocator = .{};
+    try testing.expectError(
+        error.NoUsableBitmapRegion,
+        pmm.initFromSlice(&strictly_below, backend.bitmapProvider(), backend.pageZeroer()),
+    );
+
+    // 2. Region crossing 1 MiB clamps candidate up to 0x100000 if sufficient complete pages fit above 1 MiB.
+    const crossing = [_]MemoryRegion{
+        .{ .base = 0x80000, .length = 0x84000, .kind = .usable }, // 0x80000..0x104000 (4 pages >= 1 MiB)
+    };
+    try pmm.initFromSlice(&crossing, backend.bitmapProvider(), backend.pageZeroer());
+    try testing.expectEqual(@as(u64, 0x100000), pmm.bitmap_phys);
+    try testing.expectEqual(@as(u64, 0x101000), pmm.bitmap_end_phys);
+    try testing.expectEqual(@as(u64, 0), pmm.bitmap_phys % PAGE_SIZE);
+    try testing.expectEqual(@as(usize, 4), pmm.usable_pages);
+    try testing.expectEqual(@as(usize, 3), pmm.free_pages);
+    try testing.expect(pmm.isPageAllocated(0x80000));
+    try testing.expect(pmm.isPageAllocated(0x100000));
+    try assertInvariants(&pmm);
+
+    // 3. Multi-page bitmap backing (5,120 bytes => 2 complete pages = 8,192 bytes) skips:
+    //    - region below 1 MiB
+    //    - region crossing 1 MiB with < 1 page above 1 MiB (0x80000..0x100800)
+    //    - region at 0x101000 with 6,144 bytes (fits logical 5,120 B, but NOT 2 full physical pages = 8,192 B!)
+    //    - unaligned region [0x104400, 0x106000) where page-aligned candidate 0x105000 leaves only 4,096 B < 8,192 B
+    //    and selects the later qualifying region [0x108400, 0x10C000) at aligned 0x109000!
+    const highest_ram_end: u64 = 160 * 1024 * 1024;
+    const skipped_then_selected = [_]MemoryRegion{
+        .{ .base = 0x1000, .length = 0x40000, .kind = .usable },
+        .{ .base = 0x80000, .length = 0x80800, .kind = .usable },
+        .{ .base = 0x101000, .length = 6144, .kind = .usable },
+        .{ .base = 0x104400, .length = 0x1C00, .kind = .usable },
+        .{ .base = 0x108400, .length = 0x3C00, .kind = .usable }, // 0x109000..0x10C000 (3 complete pages!)
+        .{ .base = highest_ram_end - PAGE_SIZE, .length = PAGE_SIZE, .kind = .bootloader_reclaimable },
+    };
+    try pmm.initFromSlice(&skipped_then_selected, backend.bitmapProvider(), backend.pageZeroer());
+    try testing.expectEqual(@as(usize, 5120), pmm.bitmap.len);
+    try testing.expectEqual(@as(u64, 0x109000), pmm.bitmap_phys);
+    try testing.expectEqual(@as(u64, 0x10B000), pmm.bitmap_end_phys);
+    try testing.expect(pmm.bitmap_phys >= physical_core.LOW_MEMORY_LIMIT);
+    try testing.expectEqual(@as(u64, 0), pmm.bitmap_phys % PAGE_SIZE);
+    try testing.expect(pmm.isPageAllocated(0x109000));
+    try testing.expect(pmm.isPageAllocated(0x10A000));
+    // Usable frames in skipped candidates (`0x101000`, `0x105000`) and tail of selected (`0x10B000`) remain free!
+    try testing.expect(!pmm.isPageAllocated(0x101000));
+    try testing.expect(!pmm.isPageAllocated(0x105000));
+    try testing.expect(!pmm.isPageAllocated(0x10B000));
+    try testing.expectEqual(@as(usize, 3), pmm.free_pages);
+    try assertInvariants(&pmm);
+}
+
+fn createAllocatorViaSliceReturn(
+    regions: []const MemoryRegion,
+    bitmap_provider: physical_core.BitmapProvider,
+    zeroer: physical_core.PageZeroer,
+) !PhysicalAllocator {
+    var local_pmm: PhysicalAllocator = .{};
+    try local_pmm.initFromSlice(regions, bitmap_provider, zeroer);
+    return local_pmm;
+}
+
+const ProviderLifetimeCtx = struct {
+    regions: []const MemoryRegion,
+    reads: usize = 0,
+
+    fn provider(self: *ProviderLifetimeCtx) physical_core.RegionProvider {
+        return .{
+            .ctx = self,
+            .countFn = countFn,
+            .getFn = getFn,
+        };
+    }
+
+    fn countFn(ctx: *const anyopaque) usize {
+        const self: *const ProviderLifetimeCtx = @ptrCast(@alignCast(ctx));
+        return self.regions.len;
+    }
+
+    fn getFn(ctx: *const anyopaque, index: usize) MemoryRegion {
+        const self: *ProviderLifetimeCtx = @ptrCast(@alignCast(@constCast(ctx)));
+        self.reads += 1;
+        return self.regions[index];
+    }
+};
+
+fn initViaProviderHelper(
+    pmm: *PhysicalAllocator,
+    ctx: *ProviderLifetimeCtx,
+    bitmap_provider: physical_core.BitmapProvider,
+    zeroer: physical_core.PageZeroer,
+) !void {
+    try pmm.init(ctx.provider(), bitmap_provider, zeroer);
+}
+
+noinline fn clobberStackFrame() u64 {
+    var scratch: [256]u64 = undefined;
+    for (&scratch, 0..) |*slot, i| {
+        slot.* = @as(u64, i) ^ 0xDEAD_BEEF_CAFE_BABE;
+    }
+    var sum: u64 = 0;
+    for (scratch) |v| sum +%= v;
+    return sum;
+}
+
+test "PMM retains region source safely across helper returns, stack reuse, and reinitialization" {
+    var backend = try FakeMemoryBackend.init(testing.allocator, 0x100000, 16, 512);
+    defer backend.deinit();
+
+    const regions_a = [_]MemoryRegion{
+        .{ .base = 0x100000, .length = 4 * PAGE_SIZE, .kind = .usable },
+        .{ .base = 0x104000, .length = 2 * PAGE_SIZE, .kind = .reserved },
+        .{ .base = 0x106000, .length = PAGE_SIZE, .kind = .bootloader_reclaimable },
+    };
+
+    // 1. Copy-by-value return out of helper + stack clobber must leave slice source valid.
+    var pmm = try createAllocatorViaSliceReturn(&regions_a, backend.bitmapProvider(), backend.pageZeroer());
+    std.mem.doNotOptimizeAway(clobberStackFrame());
+
+    const p0 = pmm.allocPage() orelse return error.TestUnexpectedResult; // 0x101000
+    try testing.expectError(error.NotUsableRegion, pmm.freePage(0x104000));
+    try testing.expectError(error.BitmapOverlap, pmm.freePage(0x100000));
+    try pmm.freePage(p0);
+    try assertInvariants(&pmm);
+
+    // 2. Reinitialize via external long-lived RegionProvider inside a helper whose stack frame disappears.
+    const regions_b = [_]MemoryRegion{
+        .{ .base = 0x100000, .length = 2 * PAGE_SIZE, .kind = .usable }, // 0x101000 now smaller
+        .{ .base = 0x102000, .length = 2 * PAGE_SIZE, .kind = .bootloader_reclaimable }, // was usable in A!
+    };
+    var provider_ctx: ProviderLifetimeCtx = .{ .regions = &regions_b };
+    try initViaProviderHelper(&pmm, &provider_ctx, backend.bitmapProvider(), backend.pageZeroer());
+    std.mem.doNotOptimizeAway(clobberStackFrame());
+
+    const reads_after_init = provider_ctx.reads;
+    const b0 = pmm.allocPage() orelse return error.TestUnexpectedResult; // 0x101000
+    try testing.expectEqual(@as(u64, 0x101000), b0);
+    // 0x102000 was `.usable` in regions_a, but reinitialization switched cleanly to regions_b (`.bootloader_reclaimable`).
+    try testing.expectError(error.NotUsableRegion, pmm.freePage(0x102000));
+    try testing.expect(provider_ctx.reads > reads_after_init);
+    try pmm.freePage(b0);
+    try assertInvariants(&pmm);
 }
