@@ -220,6 +220,7 @@ pub fn build(b: *std.Build) void {
     });
     const vector_policy_opts = b.addOptions();
     vector_policy_opts.addOptionPathDirectory("kernel_dir", b.path("kernel"));
+    vector_policy_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
     vector_policy_test_mod.addOptions("build_options", vector_policy_opts);
     const vector_policy_tests = b.addTest(.{
         .name = "vector_policy_test",

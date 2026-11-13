@@ -201,9 +201,127 @@ fn appendHit(
     });
 }
 
-/// Scans an assembly buffer (full .s/.S/.asm file or decoded Zig inline-asm string)
-/// for forbidden or unresolved `int <operand>` instructions while skipping comments and data strings.
-/// Fails closed whenever an `int` operand cannot be proven to resolve to an allowed vector.
+const Linemarker = struct {
+    next_line: usize,
+    filename: []const u8,
+    after_eol: usize,
+};
+
+fn parseLinemarkerLine(source: []const u8, i: usize, line_start: usize) ?Linemarker {
+    if (i != line_start or i >= source.len or source[i] != '#') return null;
+
+    var pos = i + 1;
+    while (pos < source.len and isHorizontalSpace(source[pos])) : (pos += 1) {}
+
+    if (matchesKeywordCaseInsensitive(source, pos, "line") and
+        pos + 4 < source.len and
+        isHorizontalSpace(source[pos + 4]))
+    {
+        pos += 4;
+        while (pos < source.len and isHorizontalSpace(source[pos])) : (pos += 1) {}
+    }
+
+    const digits_start = pos;
+    while (pos < source.len and std.ascii.isDigit(source[pos])) : (pos += 1) {}
+    if (pos == digits_start) return null;
+
+    const next_line = std.fmt.parseInt(usize, source[digits_start..pos], 10) catch return null;
+    while (pos < source.len and isHorizontalSpace(source[pos])) : (pos += 1) {}
+
+    if (pos >= source.len or source[pos] != '"') return null;
+    pos += 1;
+    const name_start = pos;
+    while (pos < source.len and source[pos] != '"' and source[pos] != '\n') : (pos += 1) {
+        if (source[pos] == '\\' and pos + 1 < source.len and source[pos + 1] != '\n') {
+            pos += 1;
+        }
+    }
+    if (pos >= source.len or source[pos] != '"') return null;
+    const filename = source[name_start..pos];
+
+    var after_eol = pos + 1;
+    while (after_eol < source.len and source[after_eol] != '\n') : (after_eol += 1) {}
+    if (after_eol < source.len and source[after_eol] == '\n') after_eol += 1;
+
+    return .{
+        .next_line = next_line,
+        .filename = filename,
+        .after_eol = after_eol,
+    };
+}
+
+/// Invokes the pinned Zig compiler's integrated C preprocessor (`zig clang -E`) in
+/// freestanding x86_64 `assembler-with-cpp` mode on a `.S` file. Fails closed on errors.
+fn preprocessAssemblyFile(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    disk_input_path: []const u8,
+    include_dirs: []const []const u8,
+    log_on_error: bool,
+) ![]u8 {
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+
+    try argv.appendSlice(allocator, &.{
+        build_options.zig_exe,
+        "clang",
+        "-E",
+        "-ffreestanding",
+        "--target=x86_64-freestanding-none",
+        "-x",
+        "assembler-with-cpp",
+    });
+    for (include_dirs) |inc| {
+        try argv.appendSlice(allocator, &.{ "-I", inc });
+    }
+    try argv.append(allocator, disk_input_path);
+
+    const result = try std.process.run(allocator, io, .{
+        .argv = argv.items,
+        .stdout_limit = .limited(16 * 1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
+    });
+    defer allocator.free(result.stderr);
+    errdefer allocator.free(result.stdout);
+
+    if (!result.term.success()) {
+        if (log_on_error) {
+            std.debug.print(
+                "PREPROCESSOR FAILED for {s} ({f}):\n{s}\n",
+                .{ disk_input_path, result.term, result.stderr },
+            );
+        }
+        return error.PreprocessorFailed;
+    }
+
+    return result.stdout;
+}
+
+fn scanPreprocessedAssemblyFile(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    hits: *std.ArrayList(ForbiddenIntHit),
+    logical_path: []const u8,
+    disk_input_path: []const u8,
+    include_dirs: []const []const u8,
+    log_on_error: bool,
+) !void {
+    const preprocessed = try preprocessAssemblyFile(allocator, io, disk_input_path, include_dirs, log_on_error);
+    defer allocator.free(preprocessed);
+
+    try scanAssemblyTextWithOptions(
+        allocator,
+        hits,
+        logical_path,
+        disk_input_path,
+        1,
+        true,
+        true,
+        preprocessed,
+    );
+}
+
+/// Direct assembly scanner wrapper for `.s`/`.asm` sources and decoded Zig inline assembly.
 fn scanAssemblyText(
     allocator: std.mem.Allocator,
     hits: *std.ArrayList(ForbiddenIntHit),
@@ -212,8 +330,37 @@ fn scanAssemblyText(
     advance_lines_on_newline: bool,
     source: []const u8,
 ) !void {
+    return scanAssemblyTextWithOptions(
+        allocator,
+        hits,
+        file_path,
+        null,
+        base_line,
+        advance_lines_on_newline,
+        false,
+        source,
+    );
+}
+
+/// Scans an assembly buffer (raw or preprocessed) for forbidden or unresolved `int <operand>`
+/// instructions while skipping comments and data strings.
+/// Fails closed whenever an `int` operand cannot be proven to resolve to an allowed vector.
+fn scanAssemblyTextWithOptions(
+    allocator: std.mem.Allocator,
+    hits: *std.ArrayList(ForbiddenIntHit),
+    file_path: []const u8,
+    disk_input_path: ?[]const u8,
+    base_line: usize,
+    advance_lines_on_newline: bool,
+    parse_linemarkers: bool,
+    source: []const u8,
+) !void {
     var constants: SymbolTable = .empty;
     defer deinitSymbolTable(allocator, &constants);
+
+    var owned_active_file: ?[]u8 = null;
+    defer if (owned_active_file) |buf| allocator.free(buf);
+    var active_file: []const u8 = file_path;
 
     var i: usize = 0;
     var line: usize = base_line;
@@ -233,6 +380,31 @@ fn scanAssemblyText(
             }
             i += 1;
             continue;
+        }
+
+        if (parse_linemarkers and i == line_start and source[i] == '#') {
+            if (parseLinemarkerLine(source, i, line_start)) |lm| {
+                line = lm.next_line;
+                if (!std.mem.eql(u8, lm.filename, "<built-in>") and
+                    !std.mem.eql(u8, lm.filename, "<command line>") and
+                    !std.mem.eql(u8, lm.filename, "<stdin>"))
+                {
+                    const mapped_to_logical = if (disk_input_path) |dp| std.mem.eql(u8, lm.filename, dp) else false;
+                    if (mapped_to_logical) {
+                        active_file = file_path;
+                    } else {
+                        if (owned_active_file) |prev| {
+                            allocator.free(prev);
+                            owned_active_file = null;
+                        }
+                        owned_active_file = try allocator.dupe(u8, lm.filename);
+                        active_file = owned_active_file.?;
+                    }
+                }
+                i = lm.after_eol;
+                line_start = lm.after_eol;
+                continue;
+            }
         }
 
         const ch = source[i];
@@ -308,10 +480,10 @@ fn scanAssemblyText(
 
             if (resolveOperandValue(&constants, raw_operand)) |vec| {
                 if (vectors.isForbiddenSoftwareIntVector(vec)) {
-                    try appendHit(allocator, hits, file_path, line, .forbidden_vector, vec, raw_operand, raw_snippet);
+                    try appendHit(allocator, hits, active_file, line, .forbidden_vector, vec, raw_operand, raw_snippet);
                 }
             } else {
-                try appendHit(allocator, hits, file_path, line, .unresolved_operand, null, raw_operand, raw_snippet);
+                try appendHit(allocator, hits, active_file, line, .unresolved_operand, null, raw_operand, raw_snippet);
             }
 
             i = stmt_end;
@@ -499,12 +671,10 @@ fn scanZigSource(
     }
 }
 
-fn hasScannedExtension(path: []const u8) enum { none, zig, asm_src } {
+fn hasScannedExtension(path: []const u8) enum { none, zig, asm_src, preprocessed_asm_src } {
     if (std.mem.endsWith(u8, path, ".zig")) return .zig;
-    if (std.mem.endsWith(u8, path, ".s") or
-        std.mem.endsWith(u8, path, ".S") or
-        std.mem.endsWith(u8, path, ".asm"))
-    {
+    if (std.mem.endsWith(u8, path, ".S")) return .preprocessed_asm_src;
+    if (std.mem.endsWith(u8, path, ".s") or std.mem.endsWith(u8, path, ".asm")) {
         return .asm_src;
     }
     return .none;
@@ -802,7 +972,103 @@ test "scanner 4 (Finding B): Zig string escape decoding detects \\xNN and \\u{..
     try std.testing.expectEqual(@as(?u8, null), hits.items[3].vector);
 }
 
-test "scanner 5: live kernel/ source tree contains zero forbidden or unresolved software INT instructions" {
+fn scanSyntheticPreprocessedS(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    hits: *std.ArrayList(ForbiddenIntHit),
+    filename: []const u8,
+    source: []const u8,
+    log_on_error: bool,
+) !void {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{ .sub_path = filename, .data = source });
+
+    const disk_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}/{s}",
+        .{ std.testing.TmpDir.parent_dir_path, tmp.sub_path, filename },
+    );
+    defer allocator.free(disk_path);
+
+    try scanPreprocessedAssemblyFile(allocator, io, hits, filename, disk_path, &.{}, log_on_error);
+}
+
+test "scanner 5 (Finding F-03-R2): preprocessed .S scanner catches macro-expanded INTs, keeps line provenance, and skips unused macros" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    // 1. Object-like mnemonic alias expanding to forbidden vector 14
+    {
+        const src =
+            \\#define INT_MNEMONIC int
+            \\INT_MNEMONIC $14
+            \\
+        ;
+        var hits: std.ArrayList(ForbiddenIntHit) = .empty;
+        defer deinitHits(gpa, &hits);
+        try scanSyntheticPreprocessedS(gpa, io, &hits, "obj_macro_bad.S", src, true);
+        try std.testing.expectEqual(@as(usize, 1), hits.items.len);
+        try std.testing.expectEqualStrings("obj_macro_bad.S", hits.items[0].file_path);
+        try std.testing.expectEqual(@as(usize, 2), hits.items[0].line);
+        try std.testing.expectEqual(ViolationKind.forbidden_vector, hits.items[0].kind);
+        try std.testing.expectEqual(@as(?u8, 14), hits.items[0].vector);
+    }
+
+    // 2. Function-like macro expanding to forbidden vector 14
+    {
+        const src =
+            \\#define ISSUE_INT(v) int $v
+            \\nop
+            \\ISSUE_INT(14)
+            \\
+        ;
+        var hits: std.ArrayList(ForbiddenIntHit) = .empty;
+        defer deinitHits(gpa, &hits);
+        try scanSyntheticPreprocessedS(gpa, io, &hits, "fn_macro_bad.S", src, true);
+        try std.testing.expectEqual(@as(usize, 1), hits.items.len);
+        try std.testing.expectEqualStrings("fn_macro_bad.S", hits.items[0].file_path);
+        try std.testing.expectEqual(@as(usize, 3), hits.items[0].line);
+        try std.testing.expectEqual(ViolationKind.forbidden_vector, hits.items[0].kind);
+        try std.testing.expectEqual(@as(?u8, 14), hits.items[0].vector);
+    }
+
+    // 3 & 4 & 5. Valid macro expansions (#BP 3, external 32), ordinary `#` comment, and uninvoked forbidden macro
+    {
+        const src =
+            \\#define INT_MNEMONIC int
+            \\#define UNUSED_BAD() int $14
+            \\#define UNUSED_HEX int $0x0e
+            \\# ordinary assembler comment: int $14
+            \\# 16 ordinary numeric comment without filename quotes
+            \\INT_MNEMONIC $3
+            \\INT_MNEMONIC $32
+            \\
+        ;
+        var hits: std.ArrayList(ForbiddenIntHit) = .empty;
+        defer deinitHits(gpa, &hits);
+        try scanSyntheticPreprocessedS(gpa, io, &hits, "macro_clean.S", src, true);
+        try std.testing.expectEqual(@as(usize, 0), hits.items.len);
+    }
+
+    // 6. Preprocessor failure must fail closed rather than silently skipping the file
+    {
+        const broken =
+            \\#error intentional preprocessor failure for negative test
+            \\nop
+            \\
+        ;
+        var hits: std.ArrayList(ForbiddenIntHit) = .empty;
+        defer deinitHits(gpa, &hits);
+        try std.testing.expectError(
+            error.PreprocessorFailed,
+            scanSyntheticPreprocessedS(gpa, io, &hits, "broken.S", broken, false),
+        );
+    }
+}
+
+test "scanner 6: live kernel/ source tree contains zero forbidden or unresolved software INT instructions" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 
@@ -815,6 +1081,10 @@ test "scanner 5: live kernel/ source tree contains zero forbidden or unresolved 
     var hits: std.ArrayList(ForbiddenIntHit) = .empty;
     defer deinitHits(gpa, &hits);
 
+    const kernel_src_inc = try std.fmt.allocPrint(gpa, "{s}/src", .{build_options.kernel_dir});
+    defer gpa.free(kernel_src_inc);
+    const include_dirs = [_][]const u8{ build_options.kernel_dir, kernel_src_inc };
+
     var scanned_files: usize = 0;
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
@@ -822,12 +1092,22 @@ test "scanner 5: live kernel/ source tree contains zero forbidden or unresolved 
         if (kind == .none) continue;
 
         scanned_files += 1;
-        const contents = try entry.dir.readFileAlloc(io, entry.basename, gpa, .limited(4 * 1024 * 1024));
-        defer gpa.free(contents);
-
         switch (kind) {
-            .zig => try scanZigSource(gpa, &hits, entry.path, contents),
-            .asm_src => try scanAssemblyText(gpa, &hits, entry.path, 1, true, contents),
+            .zig => {
+                const contents = try entry.dir.readFileAlloc(io, entry.basename, gpa, .limited(4 * 1024 * 1024));
+                defer gpa.free(contents);
+                try scanZigSource(gpa, &hits, entry.path, contents);
+            },
+            .asm_src => {
+                const contents = try entry.dir.readFileAlloc(io, entry.basename, gpa, .limited(4 * 1024 * 1024));
+                defer gpa.free(contents);
+                try scanAssemblyText(gpa, &hits, entry.path, 1, true, contents);
+            },
+            .preprocessed_asm_src => {
+                const disk_path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ build_options.kernel_dir, entry.path });
+                defer gpa.free(disk_path);
+                try scanPreprocessedAssemblyFile(gpa, io, &hits, entry.path, disk_path, &include_dirs, true);
+            },
             .none => unreachable,
         }
     }
