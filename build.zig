@@ -185,8 +185,26 @@ pub fn build(b: *std.Build) void {
     });
     const run_vmm_tests = b.addRunArtifact(vmm_tests);
 
+    // Stateful Heap Core Host Unit Tests (wired into the same `zig build test` step)
+    const heap_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/heap_test.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
+    heap_test_mod.addAnonymousImport("heap_core", .{
+        .root_source_file = b.path("kernel/src/mm/heap_core.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    });
+    const heap_tests = b.addTest(.{
+        .name = "heap_test",
+        .root_module = heap_test_mod,
+    });
+    const run_heap_tests = b.addRunArtifact(heap_tests);
+
     const unit_test_step = b.step("test", "Run host unit tests");
     unit_test_step.dependOn(&run_unit_tests.step);
     unit_test_step.dependOn(&run_pmm_tests.step);
     unit_test_step.dependOn(&run_vmm_tests.step);
+    unit_test_step.dependOn(&run_heap_tests.step);
 }
