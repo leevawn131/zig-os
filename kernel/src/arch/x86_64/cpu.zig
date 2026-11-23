@@ -188,5 +188,36 @@ pub inline fn lidt(desc_ptr: *const anyopaque) void {
     asm volatile ("lidt (%[ptr])"
         :
         : [ptr] "r" (desc_ptr),
+        : .{ .memory = true }
+    );
+}
+
+pub inline fn lgdt(desc_ptr: *const anyopaque) void {
+    asm volatile ("lgdt (%[ptr])"
+        :
+        : [ptr] "r" (desc_ptr),
+        : .{ .memory = true }
+    );
+}
+
+pub inline fn sgdt(desc_ptr: *anyopaque) void {
+    asm volatile ("sgdt (%[ptr])"
+        :
+        : [ptr] "r" (desc_ptr),
+        : .{ .memory = true }
+    );
+}
+
+pub inline fn ltr(selector: u16) void {
+    asm volatile ("ltr %[sel]"
+        :
+        : [sel] "r" (selector),
+        : .{ .memory = true }
+    );
+}
+
+pub inline fn str() u16 {
+    return asm volatile ("str %[ret]"
+        : [ret] "=r" (-> u16),
     );
 }

@@ -1,5 +1,6 @@
-// x86_64 Interrupt Vector Policy and Descriptor Validation
+// x86_64 Interrupt Vector Policy, IST Mapping, Overflow-Safe Stack Checks, and DF Test State Machine
 // Hardware-independent policy module shared between kernel subsystems and host tests.
+const std = @import("std");
 
 /// Total number of entries in an x86_64 Interrupt Descriptor Table (IDT).
 pub const IDT_ENTRY_COUNT: usize = 256;
@@ -10,8 +11,30 @@ pub const EXCEPTION_VECTOR_COUNT: usize = 32;
 /// First interrupt vector available for external hardware IRQs, APIC/IOAPIC, MSI, or non-exception software use.
 pub const FIRST_EXTERNAL_VECTOR: u8 = 32;
 
+/// Architectural Non-Maskable Interrupt vector (#NMI, Vector 2).
+pub const NMI_VECTOR: u8 = 2;
+
 /// Controlled software breakpoint vector (`int $3`, #BP) permitted in kernel self-tests.
-pub const CONTROLLED_BREAKPOINT_VECTOR: u8 = 3;
+pub const BREAKPOINT_VECTOR: u8 = 3;
+pub const CONTROLLED_BREAKPOINT_VECTOR: u8 = BREAKPOINT_VECTOR;
+
+/// Architectural Invalid Opcode vector (#UD, Vector 6).
+pub const INVALID_OPCODE_VECTOR: u8 = 6;
+
+/// Architectural Double Fault abort vector (#DF, Vector 8).
+pub const DOUBLE_FAULT_VECTOR: u8 = 8;
+
+/// Architectural Page Fault vector (#PF, Vector 14).
+pub const PAGE_FAULT_VECTOR: u8 = 14;
+
+/// Architectural Machine Check exception vector (#MC, Vector 18).
+pub const MACHINE_CHECK_VECTOR: u8 = 18;
+
+/// Interrupt Stack Table (IST) indices configured in BSP IDT gates (1-based; 0 = legacy RSP switch).
+pub const IST_NONE: u8 = 0;
+pub const IST_DOUBLE_FAULT: u8 = 1;
+pub const IST_NMI: u8 = 2;
+pub const IST_MACHINE_CHECK: u8 = 3;
 
 /// Remapped vector base for the master 8259 PIC (IRQ 0..7 -> vectors 0x20..0x27).
 pub const LEGACY_PIC_MASTER_OFFSET: u8 = 0x20;
@@ -50,6 +73,16 @@ pub fn pushesHardwareErrorCode(vector: u8) bool {
     return switch (vector) {
         8, 10, 11, 12, 13, 14, 17, 21, 29, 30 => true,
         else => false,
+    };
+}
+
+/// Returns the Phase 1 production IST slot (1..3) expected for `vector`, or `IST_NONE` (0).
+pub fn expectedIstForVector(vector: u8) u8 {
+    return switch (vector) {
+        DOUBLE_FAULT_VECTOR => IST_DOUBLE_FAULT,
+        NMI_VECTOR => IST_NMI,
+        MACHINE_CHECK_VECTOR => IST_MACHINE_CHECK,
+        else => IST_NONE,
     };
 }
 
@@ -112,6 +145,7 @@ pub fn isPicOffsetValid(master_offset: u8, slave_offset: u8) bool {
 pub fn isValidKernelInterruptGate(
     type_attr: u8,
     ist: u8,
+    expected_ist: u8,
     reserved: u32,
     actual_selector: u16,
     expected_selector: u16,
@@ -120,8 +154,172 @@ pub fn isValidKernelInterruptGate(
 ) bool {
     if (type_attr != IDT_GATE_FLAGS_KERNEL_INTERRUPT) return false;
     if ((ist & 0xF8) != 0) return false;
+    if ((expected_ist & 0xF8) != 0) return false;
+    if (ist != expected_ist) return false;
     if (reserved != 0) return false;
     if (actual_selector != expected_selector) return false;
     if (actual_offset != expected_offset) return false;
+    return true;
+}
+
+/// Overflow-safe verification that non-empty contiguous `[frame_addr, frame_addr + frame_size)`
+/// lies strictly within half-open `[stack_base, stack_top)`.
+/// Rejects invalid stack bounds (`stack_base > stack_top`) and empty frames (`frame_size == 0`,
+/// including when `frame_addr == stack_top`). Performs zero wrapping address additions.
+pub fn isFrameWithinStack(
+    frame_addr: u64,
+    frame_size: u64,
+    stack_base: u64,
+    stack_top: u64,
+) bool {
+    if (stack_base > stack_top or frame_size == 0) return false;
+    if (frame_addr < stack_base) return false;
+    if (frame_addr > stack_top) return false;
+    const remaining: u64 = stack_top - frame_addr;
+    return frame_size <= remaining;
+}
+
+/// Overflow-safe verification that non-empty contiguous `[frame_addr, frame_addr + frame_size)`
+/// is a valid non-overflowing range with zero byte overlap against `[stack_base, stack_top)`.
+/// Fails closed (returns `false`) if `stack_base > stack_top`, `frame_size == 0`, or
+/// `frame_addr + frame_size` overflows `u64`.
+pub fn isFrameDisjointFromStack(
+    frame_addr: u64,
+    frame_size: u64,
+    stack_base: u64,
+    stack_top: u64,
+) bool {
+    if (stack_base > stack_top or frame_size == 0) return false;
+
+    const frame_end = std.math.add(
+        u64,
+        frame_addr,
+        frame_size,
+    ) catch return false;
+
+    return frame_end <= stack_base or frame_addr >= stack_top;
+}
+
+/// Explicit 8-state lifecycle for the standalone Double Fault test harness.
+pub const DfTestState = enum(u8) {
+    inactive = 0,
+    preparing = 1,
+    armed = 2,
+    handling_df = 3,
+    passed_halting = 4,
+    failed = 5,
+    aborted_async = 6,
+    nested_fault = 7,
+
+    pub fn isTerminal(self: DfTestState) bool {
+        return switch (self) {
+            .passed_halting, .failed, .aborted_async, .nested_fault => true,
+            .inactive, .preparing, .armed, .handling_df => false,
+        };
+    }
+};
+
+pub const DfDispatchAction = enum(u8) {
+    normal_kernel_dispatch,
+    verify_df_forensics,
+    log_fail_and_halt,
+    log_nested_fail_and_halt,
+    log_inconclusive_and_halt,
+    halt_silent,
+};
+
+pub fn isValidDfTransition(from: DfTestState, to: DfTestState) bool {
+    return switch (from) {
+        .inactive => to == .preparing,
+        .preparing => to == .armed or to == .failed or to == .aborted_async,
+        .armed => to == .handling_df or to == .failed or to == .aborted_async,
+        .handling_df => to == .passed_halting or to == .failed or to == .aborted_async or to == .nested_fault,
+        .passed_halting, .failed, .aborted_async, .nested_fault => false,
+    };
+}
+
+/// Atomic compare-and-exchange (CAS) state machine governing standalone Double Fault testing.
+/// Terminal states are strictly immutable once entered.
+pub const DfStateMachine = struct {
+    state: std.atomic.Value(DfTestState) = std.atomic.Value(DfTestState).init(.inactive),
+
+    pub fn load(self: *const DfStateMachine) DfTestState {
+        return self.state.load(.seq_cst);
+    }
+
+    /// Conditional atomic transition via strong CAS (.seq_cst).
+    /// Returns true strictly if prior state equaled `expected` and was replaced with `next`.
+    /// Never overwrites any terminal state.
+    pub fn tryTransition(self: *DfStateMachine, expected: DfTestState, next: DfTestState) bool {
+        if (expected.isTerminal() or !isValidDfTransition(expected, next)) return false;
+        return self.state.cmpxchgStrong(expected, next, .seq_cst, .seq_cst) == null;
+    }
+
+    /// Dispatcher entry decision using conditional atomic CAS.
+    /// Once in any terminal state, refuses state mutation and stops further exception processing.
+    pub fn onException(self: *DfStateMachine, vector: u8) DfDispatchAction {
+        const cur = self.load();
+        const is_async = (vector == NMI_VECTOR or vector == MACHINE_CHECK_VECTOR);
+        return switch (cur) {
+            .inactive => .normal_kernel_dispatch,
+            .passed_halting, .failed, .aborted_async, .nested_fault => .halt_silent,
+            .preparing => if (is_async)
+                (if (self.tryTransition(.preparing, .aborted_async)) .log_inconclusive_and_halt else .halt_silent)
+            else
+                (if (self.tryTransition(.preparing, .failed)) .log_fail_and_halt else .halt_silent),
+            .armed => if (vector == DOUBLE_FAULT_VECTOR)
+                (if (self.tryTransition(.armed, .handling_df)) .verify_df_forensics else .halt_silent)
+            else if (is_async)
+                (if (self.tryTransition(.armed, .aborted_async)) .log_inconclusive_and_halt else .halt_silent)
+            else
+                (if (self.tryTransition(.armed, .failed)) .log_fail_and_halt else .halt_silent),
+            .handling_df => if (is_async)
+                (if (self.tryTransition(.handling_df, .aborted_async)) .log_inconclusive_and_halt else .halt_silent)
+            else
+                (if (self.tryTransition(.handling_df, .nested_fault)) .log_nested_fail_and_halt else .halt_silent),
+        };
+    }
+
+    /// Final PASS transition via atomic CAS (.handling_df -> .passed_halting).
+    /// Caller MUST emit PASS strictly only when this returns true.
+    pub fn completeDfPass(self: *DfStateMachine) bool {
+        return self.tryTransition(.handling_df, .passed_halting);
+    }
+
+    /// Final FAIL transition when hardware forensics fail (.handling_df -> .failed).
+    pub fn completeDfFail(self: *DfStateMachine) bool {
+        return self.tryTransition(.handling_df, .failed);
+    }
+};
+
+/// Pure hardware evidence captured during Vector 8 (#DF) verification.
+pub const DfForensicEvidence = struct {
+    vector: u64,
+    error_code: u64,
+    frame_addr: u64,
+    frame_size: u64,
+    ist1_base: u64,
+    ist1_top: u64,
+    cs: u64,
+    ss: u64,
+    expected_cs: u16,
+    expected_ss: u16,
+    frame_rsp: u64,
+    cr2: u64,
+    unmapped_rsp: u64,
+};
+
+/// Pure 6-factor hardware forensic validator for standalone #DF verification (`N-02`).
+/// Uses overflow-safe frame containment checks and underflow-guarded RSP/CR2 windows.
+pub fn validateDfForensics(ev: DfForensicEvidence) bool {
+    if (ev.vector != DOUBLE_FAULT_VECTOR) return false;
+    if (ev.error_code != 0) return false;
+    if (!isFrameWithinStack(ev.frame_addr, ev.frame_size, ev.ist1_base, ev.ist1_top)) return false;
+    if (ev.cs != ev.expected_cs or ev.ss != ev.expected_ss) return false;
+    if (ev.unmapped_rsp < 0x30) return false;
+
+    const lower: u64 = ev.unmapped_rsp - 0x30;
+    if (ev.frame_rsp < lower or ev.frame_rsp > ev.unmapped_rsp) return false;
+    if (ev.cr2 < lower or ev.cr2 >= ev.unmapped_rsp) return false;
     return true;
 }

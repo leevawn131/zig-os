@@ -7,7 +7,10 @@ const paging_math = @import("paging_math");
 const physical_math = @import("physical_math");
 const page_fault = @import("page_fault");
 const heap_layout = @import("heap_layout");
-const sse = @import("sse");
+const kernel_panic = @import("kernel_panic");
+const sse = kernel_panic.cpu.sse;
+const gdt_model = @import("gdt_model");
+const serial = kernel_panic.serial;
 
 // 1. Virtual memory address bitfield decomposition tests
 test "VMM address decomposition for higher-half kernel base" {
@@ -286,4 +289,94 @@ test "CR4 SSE initialization sets OSFXSR and OSXMMEXCPT and preserves unrelated 
     try testing.expect(!sse.isSseCr4Valid(base_cr4));
     try testing.expect(!sse.isSseCr4Valid(base_cr4 | sse.CR4_OSFXSR_BIT));
     try testing.expect(!sse.isSseCr4Valid(base_cr4 | sse.CR4_OSXMMEXCPT_BIT));
+}
+
+// 6. GDT, 10-byte GDTR, 104-byte TSS, and 16-byte TSS Descriptor tests (F-04)
+test "GDT/TSS ABI sizes, offsets, and initial Phase 1 layout" {
+    try testing.expectEqual(@as(usize, 10), @sizeOf(gdt_model.GdtDescriptor));
+    try testing.expectEqual(@as(usize, 0), @offsetOf(gdt_model.GdtDescriptor, "limit"));
+    try testing.expectEqual(@as(usize, 2), @offsetOf(gdt_model.GdtDescriptor, "base"));
+
+    try testing.expectEqual(@as(usize, 104), @sizeOf(gdt_model.Tss64));
+    try testing.expectEqual(@as(usize, 0x04), @offsetOf(gdt_model.Tss64, "rsp0"));
+    try testing.expectEqual(@as(usize, 0x24), @offsetOf(gdt_model.Tss64, "ist1"));
+    try testing.expectEqual(@as(usize, 0x2C), @offsetOf(gdt_model.Tss64, "ist2"));
+    try testing.expectEqual(@as(usize, 0x34), @offsetOf(gdt_model.Tss64, "ist3"));
+    try testing.expectEqual(@as(usize, 0x66), @offsetOf(gdt_model.Tss64, "iomap_base"));
+
+    const default_tss: gdt_model.Tss64 = .{};
+    try testing.expectEqual(@as(u16, 104), default_tss.iomap_base);
+    try testing.expectEqual(@as(usize, 16), @sizeOf(gdt_model.TssDescriptor16));
+    try testing.expectEqual(@as(u16, 87), gdt_model.GDT_LIMIT);
+
+    const table = gdt_model.makeInitialGdtTable();
+    for ([_]usize{ 0, 1, 2, 3, 4, 7, 8, 9, 10 }) |slot| {
+        try testing.expectEqual(@as(u64, 0), table[slot]);
+    }
+    try testing.expectEqual(gdt_model.KERNEL_CODE_DESCRIPTOR, table[5]);
+    try testing.expectEqual(gdt_model.KERNEL_DATA_DESCRIPTOR, table[6]);
+}
+
+test "16-byte TSS descriptor encoding and post-load Accessed/Busy validators" {
+    const tss_addr: u64 = 0xffff_ffff_8012_3450;
+    const desc = gdt_model.encodeTssDescriptor(tss_addr, gdt_model.TSS_MIN_LIMIT);
+
+    // Pre-LTR descriptor must be Available 64-bit TSS (0x89) with upper 32 bits of high = 0.
+    try testing.expectEqual(gdt_model.TSS_ACCESS_AVAILABLE, gdt_model.tssAccessByte(desc.low));
+    try testing.expectEqual(@as(u64, 0xffff_ffff), desc.high);
+    try testing.expect(!gdt_model.isTssDescriptorBusyValid(desc.low, desc.high, tss_addr, gdt_model.TSS_MIN_LIMIT));
+
+    // Hardware LTR sets Busy bit 41 (0x89 -> 0x8B).
+    const busy_low = desc.low | gdt_model.TSS_BUSY_BIT;
+    try testing.expectEqual(gdt_model.TSS_ACCESS_BUSY, gdt_model.tssAccessByte(busy_low));
+    try testing.expect(gdt_model.isTssDescriptorBusyValid(busy_low, desc.high, tss_addr, gdt_model.TSS_MIN_LIMIT));
+
+    // Reject base mismatch, limit mismatch, or corrupted reserved upper bits.
+    try testing.expect(!gdt_model.isTssDescriptorBusyValid(busy_low, desc.high, tss_addr + 16, gdt_model.TSS_MIN_LIMIT));
+    try testing.expect(!gdt_model.isTssDescriptorBusyValid(busy_low, desc.high, tss_addr, 200));
+    try testing.expect(!gdt_model.isTssDescriptorBusyValid(busy_low, desc.high | (@as(u64, 1) << 32), tss_addr, gdt_model.TSS_MIN_LIMIT));
+
+    // Code accepts both 0x9A (QEMU TCG lretq) and 0x9B (bare-metal/KVM Accessed=1) while rejecting other bit diffs.
+    try testing.expect(gdt_model.isCodeDescriptorValidPostLoad(gdt_model.KERNEL_CODE_DESCRIPTOR));
+    try testing.expect(gdt_model.isCodeDescriptorValidPostLoad(gdt_model.KERNEL_CODE_DESCRIPTOR | gdt_model.DESCRIPTOR_ACCESSED_BIT));
+    try testing.expect(!gdt_model.isCodeDescriptorValidPostLoad(gdt_model.KERNEL_CODE_DESCRIPTOR | (@as(u64, 3) << 45)));
+    try testing.expect(!gdt_model.isDataDescriptorValidPostLoad(gdt_model.KERNEL_DATA_DESCRIPTOR));
+    try testing.expect(gdt_model.isDataDescriptorValidPostLoad(gdt_model.KERNEL_DATA_DESCRIPTOR | gdt_model.DESCRIPTOR_ACCESSED_BIT));
+
+    // Disjoint IST stack range helper.
+    try testing.expect(gdt_model.areRangesDisjoint(0x1000, 0x5000, 0x5000, 0x9000));
+    try testing.expect(!gdt_model.areRangesDisjoint(0x1000, 0x5000, 0x4fff, 0x9000));
+    try testing.expect(!gdt_model.areRangesDisjoint(0x5000, 0x1000, 0x6000, 0x9000));
+}
+
+// 7. Bounded UART polling tests (F-04 / N-03)
+test "COM1 bounded TX polling honors spin limit and aborts on persistent busy UART" {
+    const MockUart = struct {
+        spins_until_ready: ?u32,
+        calls: u32 = 0,
+
+        fn isReady(self: *@This()) bool {
+            self.calls += 1;
+            const target = self.spins_until_ready orelse return false;
+            return self.calls > target;
+        }
+    };
+
+    try testing.expectEqual(@as(u32, 100_000), serial.MAX_TX_POLL_SPINS);
+
+    var ready_immediately = MockUart{ .spins_until_ready = 0 };
+    try testing.expect(serial.waitForTxReady(&ready_immediately, MockUart.isReady, 10));
+    try testing.expectEqual(@as(u32, 1), ready_immediately.calls);
+
+    var ready_on_fourth = MockUart{ .spins_until_ready = 3 };
+    try testing.expect(serial.waitForTxReady(&ready_on_fourth, MockUart.isReady, 4));
+    try testing.expectEqual(@as(u32, 4), ready_on_fourth.calls);
+
+    var never_ready = MockUart{ .spins_until_ready = null };
+    try testing.expect(!serial.waitForTxReady(&never_ready, MockUart.isReady, 25));
+    try testing.expectEqual(@as(u32, 25), never_ready.calls);
+
+    var zero_budget = MockUart{ .spins_until_ready = 0 };
+    try testing.expect(!serial.waitForTxReady(&zero_budget, MockUart.isReady, 0));
+    try testing.expectEqual(@as(u32, 0), zero_budget.calls);
 }

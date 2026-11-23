@@ -6,18 +6,62 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/build"
-ISO_ROOT="${BUILD_DIR}/iso_root"
-OUTPUT_ISO="${BUILD_DIR}/zig-os.iso"
 LIMINE_DIR="${PROJECT_ROOT}/boot/limine"
-KERNEL_BIN="${PROJECT_ROOT}/zig-out/bin/kernel.elf"
 
 # shellcheck source=scripts/lib/provenance.sh
 source "${PROJECT_ROOT}/scripts/lib/provenance.sh"
 
-resolve_optimize_from_args 0 "$@"
+PROFILE="prod"
+OPT_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --profile)
+            if [[ $# -lt 2 ]]; then
+                echo "[ISO ERROR] Missing value for --profile." >&2
+                exit 1
+            fi
+            PROFILE="$2"
+            shift 2
+            ;;
+        --profile=*)
+            PROFILE="${1#--profile=}"
+            shift
+            ;;
+        *)
+            OPT_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+resolve_optimize_from_args 0 "${OPT_ARGS[@]}"
+
+case "${PROFILE}" in
+    prod)
+        ISO_ROOT="${BUILD_DIR}/iso_root"
+        EXPECTED_ISO_ROOT="${BUILD_DIR}/iso_root"
+        OUTPUT_ISO="${BUILD_DIR}/zig-os.iso"
+        KERNEL_BIN="${PROJECT_ROOT}/zig-out/bin/kernel.elf"
+        PKG_TMP_PREFIX="zig-os-pkg-prod"
+        TMP_ISO_NAME="zig-os.iso"
+        ;;
+    df-test)
+        ISO_ROOT="${BUILD_DIR}/df-test/iso_root"
+        EXPECTED_ISO_ROOT="${BUILD_DIR}/df-test/iso_root"
+        OUTPUT_ISO="${BUILD_DIR}/zig-os-df-test.iso"
+        KERNEL_BIN="${PROJECT_ROOT}/zig-out/df-test/kernel-df-test.elf"
+        PKG_TMP_PREFIX="zig-os-pkg-df-test"
+        TMP_ISO_NAME="zig-os-df-test.iso"
+        ;;
+    *)
+        echo "[ISO ERROR] Unsupported profile '${PROFILE}'. Expected 'prod' or 'df-test'." >&2
+        exit 1
+        ;;
+esac
+
 cd "${PROJECT_ROOT}"
 
-echo "[ISO] Verifying packaging prerequisites (Optimization mode: ${ZIG_OS_SELECTED_OPTIMIZE})..."
+echo "[ISO] Verifying packaging prerequisites (Profile: ${PROFILE}, Optimization mode: ${ZIG_OS_SELECTED_OPTIMIZE})..."
 command -v xorriso >/dev/null 2>&1 || { echo "Error: xorriso not found" >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || { echo "Error: sha256sum not found" >&2; exit 1; }
 command -v make >/dev/null 2>&1 || { echo "Error: make not found" >&2; exit 1; }
@@ -33,19 +77,19 @@ if [[ ! -f "${KERNEL_BIN}" || ! -s "${KERNEL_BIN}" ]]; then
 fi
 
 collect_git_metadata "${PROJECT_ROOT}"
-echo "[ISO] Build metadata: commit=${ZIG_OS_GIT_COMMIT} tree=${ZIG_OS_GIT_DIRTY} optimize=${ZIG_OS_SELECTED_OPTIMIZE}"
+echo "[ISO] Build metadata: profile=${PROFILE} commit=${ZIG_OS_GIT_COMMIT} tree=${ZIG_OS_GIT_DIRTY} optimize=${ZIG_OS_SELECTED_OPTIMIZE}"
 
-# Refresh only build/iso_root rather than destroying all of build/.
-if [[ "${ISO_ROOT}" != "${BUILD_DIR}/iso_root" ]]; then
+# Refresh only the selected profile's ISO staging directory rather than destroying all of build/.
+if [[ "${ISO_ROOT}" != "${EXPECTED_ISO_ROOT}" ]]; then
     echo "Error: Refusing to clean unexpected ISO_ROOT path: ${ISO_ROOT}" >&2
     exit 1
 fi
 
-echo "[ISO] Preparing ISO root filesystem..."
+echo "[ISO] Preparing ISO root filesystem at ${ISO_ROOT}..."
 rm -rf "${ISO_ROOT}"
 mkdir -p "${ISO_ROOT}/boot/limine"
 mkdir -p "${ISO_ROOT}/EFI/BOOT"
-mkdir -p "${BUILD_DIR}"
+mkdir -p "$(dirname "${OUTPUT_ISO}")"
 
 cp "${LIMINE_DIR}/limine.conf" "${ISO_ROOT}/boot/limine/"
 cp "${LIMINE_DIR}/limine-bios.sys" "${ISO_ROOT}/boot/limine/"
@@ -54,13 +98,13 @@ cp "${LIMINE_DIR}/limine-uefi-cd.bin" "${ISO_ROOT}/boot/limine/"
 cp "${LIMINE_DIR}/BOOTX64.EFI" "${ISO_ROOT}/EFI/BOOT/"
 cp "${KERNEL_BIN}" "${ISO_ROOT}/boot/kernel.elf"
 
-PKG_TMP="$(mktemp -d "${TMPDIR:-/tmp}/zig-os-pkg-XXXXXX")"
+PKG_TMP="$(mktemp -d "${TMPDIR:-/tmp}/${PKG_TMP_PREFIX}-XXXXXX")"
 cleanup_pkg() {
     rm -rf "${PKG_TMP}"
 }
 trap cleanup_pkg EXIT
 
-TMP_ISO="${PKG_TMP}/zig-os.iso"
+TMP_ISO="${PKG_TMP}/${TMP_ISO_NAME}"
 
 echo "[ISO] Generating hybrid bootable ISO with xorriso..."
 xorriso -as mkisofs -R -r -J \
@@ -79,4 +123,4 @@ mv -f "${TMP_ISO}" "${OUTPUT_ISO}"
 echo "[ISO] Successfully generated bootable ISO: ${OUTPUT_ISO}"
 ls -lh "${OUTPUT_ISO}"
 
-verify_and_log_provenance "${PROJECT_ROOT}" "${ZIG_OS_SELECTED_OPTIMIZE}"
+verify_and_log_provenance "${PROJECT_ROOT}" "${ZIG_OS_SELECTED_OPTIMIZE}" "${PROFILE}"

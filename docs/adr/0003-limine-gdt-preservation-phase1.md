@@ -1,9 +1,11 @@
 # ADR-0003: Limine GDT Preservation in Phase 1
 
 ## Status
-ACCEPTED
+SUPERSEDED by [ADR-0005](0005-kernel-owned-gdt-tss-ist-phase1.md) (2026-11-18)
 Date: 2026-11-10
 Author: Principal OS Architect
+
+> **Superseding Notice (2026-11-18):** This ADR has been superseded by [ADR-0005: Kernel-Owned 64-Bit GDT, TSS, and IST Exception Stacks in Phase 1](0005-kernel-owned-gdt-tss-ist-phase1.md), which establishes a kernel-owned 64-bit GDT (preserving selectors `0x28` and `0x30` with TSS selector `0x48`), a 104-byte 64-bit TSS, and dedicated `IST1` (`#DF`), `IST2` (`#NMI`), and `IST3` (`#MC`) emergency stacks on the Bootstrap Processor during Phase 1 hardening while keeping Ring 3 deferred to Phase 2.
 
 ## Context
 Limine 12.9.6 sets up a valid 64-bit flat Global Descriptor Table (GDT) prior to handing execution to the kernel entry point. The Code Segment (CS) selector is initialized to `0x28` (40) and Data/Stack Segments (DS, SS) to `0x30` (48). Replacing the GDT prematurely during Phase 1 adds unnecessary risk and can cause segmentation faults or triple faults if selector attributes or registers fall out of synchronization.

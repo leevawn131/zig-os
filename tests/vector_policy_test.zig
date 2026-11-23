@@ -754,23 +754,277 @@ test "vectors 4: legacy 8259 PIC vector offset validation" {
     try std.testing.expect(!vectors.isPicOffsetValid(0x20, 0xF9));
 }
 
-test "vectors 5: pure IDT kernel interrupt gate validator checks flags, IST reserved bits, reserved, selector, offset" {
+test "vectors 5: pure IDT kernel interrupt gate validator checks flags, IST match, reserved, selector, offset" {
     const cs: u16 = 0x28;
     const addr: u64 = 0xffffffff80001234;
 
-    try std.testing.expect(vectors.isValidKernelInterruptGate(vectors.IDT_GATE_FLAGS_KERNEL_INTERRUPT, 0, 0, cs, cs, addr, addr));
-    try std.testing.expect(vectors.isValidKernelInterruptGate(0x8E, 7, 0, cs, cs, addr, addr));
+    try std.testing.expect(vectors.isValidKernelInterruptGate(vectors.IDT_GATE_FLAGS_KERNEL_INTERRUPT, 0, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(vectors.isValidKernelInterruptGate(0x8E, 7, 7, 0, cs, cs, addr, addr));
 
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0xEE, 0, 0, cs, cs, addr, addr));
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0xAE, 0, 0, cs, cs, addr, addr));
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x0E, 0, 0, cs, cs, addr, addr));
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8F, 0, 0, cs, cs, addr, addr));
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x9E, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0xEE, 0, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0xAE, 0, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x0E, 0, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8F, 0, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x9E, 0, 0, 0, cs, cs, addr, addr));
 
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 8, 0, cs, cs, addr, addr));
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 0, 1, cs, cs, addr, addr));
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 0, 0, 0x08, cs, addr, addr));
-    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 0, 0, cs, cs, addr + 4, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 8, 8, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 8, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 0, 1, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 1, 0, 0, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 0, 0, 1, cs, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 0, 0, 0, 0x08, cs, addr, addr));
+    try std.testing.expect(!vectors.isValidKernelInterruptGate(0x8E, 0, 0, 0, cs, cs, addr + 4, addr));
+}
+
+test "vectors 6: Phase 1 expected IST mapping assigns IST1(#DF), IST2(#NMI), IST3(#MC), and 0 elsewhere" {
+    for (0..vectors.IDT_ENTRY_COUNT) |v_usize| {
+        const v: u8 = @intCast(v_usize);
+        const expected: u8 = switch (v) {
+            8 => 1,
+            2 => 2,
+            18 => 3,
+            else => 0,
+        };
+        try std.testing.expectEqual(expected, vectors.expectedIstForVector(v));
+    }
+}
+
+test "vectors 7 (FIX-01): overflow-safe stack/frame containment and disjointness boundary matrix" {
+    const stack_base: u64 = 0xFFFF_8000_0001_0000;
+    const stack_top: u64 = stack_base + 16384;
+    const frame_sz: u64 = 176;
+
+    // 1. frame_addr = 0
+    try std.testing.expect(!vectors.isFrameWithinStack(0, frame_sz, stack_base, stack_top));
+    try std.testing.expect(vectors.isFrameDisjointFromStack(0, frame_sz, stack_base, stack_top));
+    try std.testing.expect(vectors.isFrameWithinStack(0, frame_sz, 0, 4096));
+
+    // 2. frame_addr = maxInt(u64), frame_size = 1 -> overflow -> BOTH must return false
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(std.math.maxInt(u64), 1, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameWithinStack(std.math.maxInt(u64), 1, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameWithinStack(std.math.maxInt(u64), 1, stack_base, std.math.maxInt(u64)));
+
+    // 3. frame range whose end overflows u64 -> BOTH must return false
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(std.math.maxInt(u64) - 16, frame_sz, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameWithinStack(std.math.maxInt(u64) - 16, frame_sz, stack_base, stack_top));
+
+    // 4. frame_addr = stack_top, frame_size = 0 -> within-stack MUST return false
+    try std.testing.expect(!vectors.isFrameWithinStack(stack_top, 0, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameWithinStack(stack_base, 0, stack_base, stack_top));
+
+    // 5. frame_size = 0 -> disjoint MUST return false everywhere
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(0, 0, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(stack_base, 0, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(stack_top, 0, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(std.math.maxInt(u64), 0, stack_base, stack_top));
+
+    // 6. Frame starts before stack
+    try std.testing.expect(!vectors.isFrameWithinStack(stack_base - 1, frame_sz, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(stack_base - 1, frame_sz, stack_base, stack_top));
+    try std.testing.expect(vectors.isFrameDisjointFromStack(stack_base - frame_sz, frame_sz, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(stack_base - frame_sz + 1, frame_sz, stack_base, stack_top));
+
+    // 7. Frame starts at/after stack_top
+    try std.testing.expect(!vectors.isFrameWithinStack(stack_top, frame_sz, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameWithinStack(stack_top + 1, frame_sz, stack_base, stack_top));
+    try std.testing.expect(vectors.isFrameDisjointFromStack(stack_top, frame_sz, stack_base, stack_top));
+    try std.testing.expect(vectors.isFrameDisjointFromStack(stack_top + 1, frame_sz, stack_base, stack_top));
+
+    // 8. Frame flush at stack bottom
+    try std.testing.expect(vectors.isFrameWithinStack(stack_base, frame_sz, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(stack_base, frame_sz, stack_base, stack_top));
+
+    // 9. Frame flush at stack top
+    try std.testing.expect(vectors.isFrameWithinStack(stack_top - frame_sz, frame_sz, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(stack_top - frame_sz, frame_sz, stack_base, stack_top));
+
+    // 10. Frame exceeds stack top by exactly 1 byte
+    try std.testing.expect(!vectors.isFrameWithinStack(stack_top - frame_sz + 1, frame_sz, stack_base, stack_top));
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(stack_top - frame_sz + 1, frame_sz, stack_base, stack_top));
+
+    // 11. Invalid stack range (base > top)
+    try std.testing.expect(!vectors.isFrameWithinStack(stack_base, frame_sz, stack_top, stack_base));
+    try std.testing.expect(!vectors.isFrameDisjointFromStack(0, frame_sz, stack_top, stack_base));
+}
+
+test "vectors 8: DfStateMachine atomic CAS transitions, NMI/MC in handling_df, terminal immutability, and race rejection" {
+    // 1. Standard happy path: inactive -> preparing -> armed -> handling_df -> passed_halting
+    {
+        var sm: vectors.DfStateMachine = .{};
+        try std.testing.expectEqual(vectors.DfTestState.inactive, sm.load());
+        try std.testing.expectEqual(vectors.DfDispatchAction.normal_kernel_dispatch, sm.onException(3));
+
+        try std.testing.expect(sm.tryTransition(.inactive, .preparing));
+        try std.testing.expect(sm.tryTransition(.preparing, .armed));
+        try std.testing.expectEqual(vectors.DfDispatchAction.verify_df_forensics, sm.onException(vectors.DOUBLE_FAULT_VECTOR));
+        try std.testing.expectEqual(vectors.DfTestState.handling_df, sm.load());
+
+        try std.testing.expect(sm.completeDfPass());
+        try std.testing.expectEqual(vectors.DfTestState.passed_halting, sm.load());
+
+        // Late NMI/MC/sync after PASS must halt silently and never overwrite passed_halting.
+        try std.testing.expectEqual(vectors.DfDispatchAction.halt_silent, sm.onException(vectors.NMI_VECTOR));
+        try std.testing.expectEqual(vectors.DfDispatchAction.halt_silent, sm.onException(vectors.MACHINE_CHECK_VECTOR));
+        try std.testing.expectEqual(vectors.DfDispatchAction.halt_silent, sm.onException(vectors.DOUBLE_FAULT_VECTOR));
+        try std.testing.expectEqual(vectors.DfTestState.passed_halting, sm.load());
+    }
+
+    // 2. Invalid direct transitions must be rejected without mutating state
+    {
+        var sm: vectors.DfStateMachine = .{};
+        try std.testing.expect(!sm.tryTransition(.inactive, .armed));
+        try std.testing.expect(!sm.tryTransition(.inactive, .handling_df));
+        try std.testing.expect(!sm.tryTransition(.inactive, .passed_halting));
+        try std.testing.expect(!sm.tryTransition(.preparing, .handling_df));
+        try std.testing.expectEqual(vectors.DfTestState.inactive, sm.load());
+
+        try std.testing.expect(sm.tryTransition(.inactive, .preparing));
+        try std.testing.expect(!sm.tryTransition(.preparing, .passed_halting));
+        try std.testing.expect(sm.tryTransition(.preparing, .armed));
+        try std.testing.expect(!sm.tryTransition(.armed, .passed_halting));
+        try std.testing.expect(!sm.tryTransition(.armed, .nested_fault));
+        try std.testing.expect(!sm.tryTransition(.armed, .preparing));
+        try std.testing.expectEqual(vectors.DfTestState.armed, sm.load());
+    }
+
+    // 3. NMI and MC during .handling_df transition to .aborted_async (INCONCLUSIVE), blocking PASS CAS
+    for ([_]u8{ vectors.NMI_VECTOR, vectors.MACHINE_CHECK_VECTOR }) |async_vec| {
+        var sm: vectors.DfStateMachine = .{};
+        try std.testing.expect(sm.tryTransition(.inactive, .preparing));
+        try std.testing.expect(sm.tryTransition(.preparing, .armed));
+        try std.testing.expectEqual(vectors.DfDispatchAction.verify_df_forensics, sm.onException(vectors.DOUBLE_FAULT_VECTOR));
+
+        // Asynchronous hardware event interrupts #DF verification: must log INCONCLUSIVE, never FAIL.
+        try std.testing.expectEqual(vectors.DfDispatchAction.log_inconclusive_and_halt, sm.onException(async_vec));
+        try std.testing.expectEqual(vectors.DfTestState.aborted_async, sm.load());
+
+        // Competing completeDfPass() after async abort MUST fail so PASS is never emitted.
+        try std.testing.expect(!sm.completeDfPass());
+        try std.testing.expectEqual(vectors.DfTestState.aborted_async, sm.load());
+    }
+
+    // 4. Synchronous exception or nested #DF during .handling_df transitions to .nested_fault (FAIL)
+    for ([_]u8{ vectors.PAGE_FAULT_VECTOR, vectors.INVALID_OPCODE_VECTOR, vectors.DOUBLE_FAULT_VECTOR }) |sync_vec| {
+        var sm: vectors.DfStateMachine = .{};
+        try std.testing.expect(sm.tryTransition(.inactive, .preparing));
+        try std.testing.expect(sm.tryTransition(.preparing, .armed));
+        try std.testing.expectEqual(vectors.DfDispatchAction.verify_df_forensics, sm.onException(vectors.DOUBLE_FAULT_VECTOR));
+
+        try std.testing.expectEqual(vectors.DfDispatchAction.log_nested_fail_and_halt, sm.onException(sync_vec));
+        try std.testing.expectEqual(vectors.DfTestState.nested_fault, sm.load());
+        try std.testing.expect(!sm.completeDfPass());
+    }
+
+    // 5. Async event and sync exception in .preparing and .armed
+    {
+        var sm_prep_async: vectors.DfStateMachine = .{};
+        try std.testing.expect(sm_prep_async.tryTransition(.inactive, .preparing));
+        try std.testing.expectEqual(vectors.DfDispatchAction.log_inconclusive_and_halt, sm_prep_async.onException(vectors.NMI_VECTOR));
+        try std.testing.expectEqual(vectors.DfTestState.aborted_async, sm_prep_async.load());
+
+        var sm_armed_sync: vectors.DfStateMachine = .{};
+        try std.testing.expect(sm_armed_sync.tryTransition(.inactive, .preparing));
+        try std.testing.expect(sm_armed_sync.tryTransition(.preparing, .armed));
+        try std.testing.expectEqual(vectors.DfDispatchAction.log_fail_and_halt, sm_armed_sync.onException(vectors.INVALID_OPCODE_VECTOR));
+        try std.testing.expectEqual(vectors.DfTestState.failed, sm_armed_sync.load());
+
+        var sm_armed_mc: vectors.DfStateMachine = .{};
+        try std.testing.expect(sm_armed_mc.tryTransition(.inactive, .preparing));
+        try std.testing.expect(sm_armed_mc.tryTransition(.preparing, .armed));
+        try std.testing.expectEqual(vectors.DfDispatchAction.log_inconclusive_and_halt, sm_armed_mc.onException(vectors.MACHINE_CHECK_VECTOR));
+        try std.testing.expectEqual(vectors.DfTestState.aborted_async, sm_armed_mc.load());
+    }
+
+    // 6. Terminal state immutability across ALL 4 terminal states + competing CAS failures
+    const all_states = [_]vectors.DfTestState{
+        .inactive, .preparing, .armed, .handling_df, .passed_halting, .failed, .aborted_async, .nested_fault,
+    };
+    const terminal_states = [_]vectors.DfTestState{
+        .passed_halting, .failed, .aborted_async, .nested_fault,
+    };
+    for (terminal_states) |term| {
+        var sm: vectors.DfStateMachine = .{ .state = std.atomic.Value(vectors.DfTestState).init(term) };
+        for (all_states) |target| {
+            try std.testing.expect(!sm.tryTransition(term, target));
+        }
+        try std.testing.expectEqual(vectors.DfDispatchAction.halt_silent, sm.onException(vectors.DOUBLE_FAULT_VECTOR));
+        try std.testing.expectEqual(vectors.DfDispatchAction.halt_silent, sm.onException(vectors.NMI_VECTOR));
+        try std.testing.expectEqual(vectors.DfDispatchAction.halt_silent, sm.onException(vectors.MACHINE_CHECK_VECTOR));
+        try std.testing.expectEqual(vectors.DfDispatchAction.halt_silent, sm.onException(vectors.INVALID_OPCODE_VECTOR));
+        try std.testing.expectEqual(term, sm.load());
+    }
+
+    // Competing CAS from .armed: only first succeeds.
+    var sm_race: vectors.DfStateMachine = .{};
+    try std.testing.expect(sm_race.tryTransition(.inactive, .preparing));
+    try std.testing.expect(sm_race.tryTransition(.preparing, .armed));
+    try std.testing.expect(sm_race.tryTransition(.armed, .handling_df));
+    try std.testing.expect(!sm_race.tryTransition(.armed, .aborted_async));
+    try std.testing.expectEqual(vectors.DfTestState.handling_df, sm_race.load());
+}
+
+test "vectors 9: pure 6-factor #DF forensic validator enforces overflow-safe bounds and exact selectors" {
+    const ist1_base: u64 = 0xFFFF_FFFF_8010_0000;
+    const ist1_top: u64 = ist1_base + 16384;
+    const unmapped_rsp: u64 = 0x0000_0042_0001_0800;
+    const valid_ev: vectors.DfForensicEvidence = .{
+        .vector = 8,
+        .error_code = 0,
+        .frame_addr = ist1_top - 176,
+        .frame_size = 176,
+        .ist1_base = ist1_base,
+        .ist1_top = ist1_top,
+        .cs = 0x28,
+        .ss = 0x30,
+        .expected_cs = 0x28,
+        .expected_ss = 0x30,
+        .frame_rsp = unmapped_rsp,
+        .cr2 = unmapped_rsp - 8,
+        .unmapped_rsp = unmapped_rsp,
+    };
+
+    try std.testing.expect(vectors.validateDfForensics(valid_ev));
+
+    var ev_lower_edge = valid_ev;
+    ev_lower_edge.frame_rsp = unmapped_rsp - 0x30;
+    ev_lower_edge.cr2 = unmapped_rsp - 0x30;
+    try std.testing.expect(vectors.validateDfForensics(ev_lower_edge));
+
+    var bad_vec = valid_ev;
+    bad_vec.vector = 14;
+    try std.testing.expect(!vectors.validateDfForensics(bad_vec));
+
+    var bad_err = valid_ev;
+    bad_err.error_code = 1;
+    try std.testing.expect(!vectors.validateDfForensics(bad_err));
+
+    var bad_frame_over = valid_ev;
+    bad_frame_over.frame_addr = ist1_top - 175;
+    try std.testing.expect(!vectors.validateDfForensics(bad_frame_over));
+
+    var bad_frame_wrap = valid_ev;
+    bad_frame_wrap.frame_addr = std.math.maxInt(u64);
+    try std.testing.expect(!vectors.validateDfForensics(bad_frame_wrap));
+
+    var bad_cs = valid_ev;
+    bad_cs.cs = 0x08;
+    try std.testing.expect(!vectors.validateDfForensics(bad_cs));
+
+    var bad_ss = valid_ev;
+    bad_ss.ss = 0x00;
+    try std.testing.expect(!vectors.validateDfForensics(bad_ss));
+
+    var bad_cr2_top = valid_ev;
+    bad_cr2_top.cr2 = unmapped_rsp;
+    try std.testing.expect(!vectors.validateDfForensics(bad_cr2_top));
+
+    var bad_rsp = valid_ev;
+    bad_rsp.frame_rsp = unmapped_rsp + 8;
+    try std.testing.expect(!vectors.validateDfForensics(bad_rsp));
+
+    var bad_unmapped_underflow = valid_ev;
+    bad_unmapped_underflow.unmapped_rsp = 0x20;
+    try std.testing.expect(!vectors.validateDfForensics(bad_unmapped_underflow));
 }
 
 test "scanner 1: assembly scanner detects forbidden INT n in decimal/hex/AT&T/Intel while ignoring comments and strings" {

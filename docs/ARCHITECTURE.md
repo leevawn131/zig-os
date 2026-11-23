@@ -18,16 +18,20 @@ ZIG-OS is a production-oriented, freestanding 64-bit operating system developed 
 
 ## 2. CPU & Interrupt Subsystem (Phase 1)
 
-### 2.1 GDT Rationale & Selector Management
-Limine 12.9.6 prepares a valid 64-bit flat GDT prior to kernel entry:
-- Code Segment Selector: `0x28` (Ring 0, 64-bit code)
-- Data Segment Selector: `0x30` (Ring 0, 64-bit data)
+### 2.1 Kernel-Owned GDT, 64-Bit TSS & IST1–IST3 Stacks (ADR-0005, BSP Only)
+Early kernel initialization switches from Limine 12.9.6's reclaimable GDT to a permanent kernel-owned 64-bit GDT and 104-byte `Tss64` on the Bootstrap Processor via one-shot `gdt.init()`:
+- Kernel Code Selector: `0x28` (Index `5`, Ring 0, 64-bit code; `0x9B` Accessed=1 on silicon/KVM or `0x9A` under QEMU TCG `lretq`)
+- Kernel Data Selector: `0x30` (Index `6`, Ring 0, 64-bit data; hardware Accessed `0x93` after load)
+- 16-Byte 64-Bit TSS Descriptor: `0x48` (Indices `9..10`, Available `0x89` pre-`ltr`, Busy `0x8B` post-`ltr`, `iomap_base = 104`)
+- Reserved (`0`, Not-Present) Slots: `0x08..0x20` and `0x38..0x40` (Ring 3 user descriptors deferred to Phase 2)
+- Dedicated 16 KiB `.bss` IST Emergency Stacks: `IST1` -> Vector 8 (`#DF`), `IST2` -> Vector 2 (`#NMI`), `IST3` -> Vector 18 (`#MC`, preserving Limine's `CR4.MCE` bit under `MCE-2` policy and treating `#MC` as non-recoverable in Phase 1).
 
-In accordance with Phase 1 design requirements, Limine's GDT is documented and preserved during Phase 1 kernel mode execution. IDT gates dynamically query `getCs()` to eliminate hardcoded selector dependencies. A custom GDT with a Task State Segment (TSS) will be loaded in Phase 2 for Ring 3 privilege transitions.
+Hardware-independent descriptor types (`GdtDescriptor` 10-byte `lgdt`/`sgdt` operand, `TssDescriptor16`, `Tss64`, validators) are isolated in `kernel/src/arch/x86_64/gdt/gdt_model.zig`.
 
 ### 2.2 IDT & Assembly ISR Stubs
-- **256 Interrupt Gates**: Fully populated with 64-bit Interrupt Gate descriptors (`0x8E` = Present, DPL 0, 64-bit Interrupt Gate).
-- **Exception Gate Validation**: `idt.validateExceptionGates()` verifies during boot that IDTR points to `idt_table`, every gate (including exceptions `0..31`) uses `0x8E` (Present, DPL=0, 64-bit Interrupt Gate), current CS selector (`gdt.getCs()`), cleared reserved fields, exact `isr_stub_table[i]` offsets, and distinct exception stub addresses.
+- **256 Interrupt Gates**: `idt.initEarly()` installs all 256 64-bit Interrupt Gate descriptors (`0x8E`, `ist = 0`) immediately after `cpu.cli()`, minimizing the `IDTR = undefined` boot window prior to SSE/UART/GDT setup.
+- **Ordered IST Activation**: After `gdt.init()` and `idt.testIstStackSwitch()`, `idt.enableIstGates()` activates `IST1`/`IST2`/`IST3` via ordered per-entry updates while `RFLAGS.IF = 0` (`CLI` does not mask `#NMI` or `#MC`; both prior `ist = 0` and active IST paths remain valid across the transition).
+- **Exception Gate Validation**: `idt.validateExceptionGates()` verifies during boot that IDTR points to `idt_table`, every gate (including exceptions `0..31`) uses `0x8E` (Present, DPL=0, 64-bit Interrupt Gate), expected IST (`vectors.expectedIstForVector`), current CS selector (`0x28`), cleared reserved fields, exact `isr_stub_table[i]` offsets, and distinct exception stub addresses.
 - **IDTR Register**: Defined as `packed struct(u80)` (16-bit limit at offset 0, 64-bit base at offset 2, total 10 bytes).
 - **Error Code Normalization**:
   - Vectors 8, 10, 11, 12, 13, 14, 17, 21, 29, 30 push a CPU hardware error code.

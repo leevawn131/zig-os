@@ -71,5 +71,6 @@ Specify host unit tests, in-kernel self-tests, and QEMU integration tests.
 |---|---|---|---|---|
 | **[0001](0001-higher-half-kernel-memory-layout.md)** | Higher-Half Kernel Memory Layout & HHDM Access | ACCEPTED | 2026-11-10 | Memory / Architecture |
 | **[0002](0002-pure-zig-freestanding-kernel.md)** | Pure Zig Freestanding Kernel (No C/C++) | ACCEPTED | 2026-11-10 | Core Language |
-| **[0003](0003-limine-gdt-preservation-phase1.md)** | Limine GDT Preservation in Phase 1 | ACCEPTED | 2026-11-10 | CPU / Segmentation |
+| **[0003](0003-limine-gdt-preservation-phase1.md)** | Limine GDT Preservation in Phase 1 | SUPERSEDED by [ADR-0005](0005-kernel-owned-gdt-tss-ist-phase1.md) | 2026-11-10 | CPU / Segmentation |
 | **[0004](0004-segregated-heap-allocator-canaries.md)** | Segregated Coalescing Heap Allocator with Canaries | ACCEPTED | 2026-11-10 | Heap / Memory |
+| **[0005](0005-kernel-owned-gdt-tss-ist-phase1.md)** | Kernel-Owned 64-Bit GDT, TSS, and IST Exception Stacks in Phase 1 | ACCEPTED | 2026-11-18 | CPU / Segmentation & Interrupts |

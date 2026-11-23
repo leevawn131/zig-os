@@ -46,8 +46,8 @@ flowchart LR
 ---
 
 ## Phase 1: Core Kernel Infrastructure (Status: Agent-Reported Complete - Pending Human Review)
-- [x] **GDT Management**: Preserved and documented Limine 64-bit kernel descriptors (CS: `0x28`, DS: `0x30`), with dynamic selector querying for IDT gates.
-- [x] **IDT & 256 Gates**: Full 256-entry Interrupt Descriptor Table with 64-bit Interrupt Gate descriptors and `packed struct(u80)` IDTR.
+- [x] **GDT, 64-bit TSS & IST1–IST3 Management (`F-04`, ADR-0005)**: Kernel-owned 64-bit GDT (`0x28`/`0x30`/`0x48`), one-shot BSP `gdt.init()`, 104-byte 64-bit TSS, three dedicated 16 KiB `.bss` IST stacks (`#DF`, `#NMI`, `#MC` under `MCE-2`), bounded emergency panic/exception serial logging, and isolated standalone `#DF` test.
+- [x] **IDT & 256 Gates**: Early `idt.initEarly()` (`ist = 0`), ordered per-entry IST activation (`enableIstGates()`), controlled `int $3` IST1–IST3 switch verification, `validateExceptionGates()`, and `packed struct(u80)` IDTR.
 - [x] **ISR Assembly Stubs**: 256 assembly vector stubs handling error codes vs dummy error codes, saving 15 GPRs, clearing direction flag (`cld`), and calling Zig dispatcher.
 - [x] **CPU Exception Handlers**: Exception dispatch with full diagnostic logging for vectors 0..31, controlled non-fatal test hooks, and safe `hltLoop` on unrecoverable faults.
 - [x] **Page Fault Diagnostics (#PF)**: CR2 faulting linear address reading and bitfield decoding (Present, Write/Read, User/Supervisor, Reserved bit, Instruction fetch NX).

@@ -1,5 +1,29 @@
 const std = @import("std");
 
+fn addKernelModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.Optimize,
+    test_double_fault: bool,
+) *std.Build.Module {
+    const opts = b.addOptions();
+    opts.addOption(bool, "test_double_fault", test_double_fault);
+
+    const mod = b.createModule(.{
+        .root_source_file = b.path("kernel/src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .code_model = .kernel,
+        .red_zone = false,
+    });
+    mod.addOptions("build_options", opts);
+    mod.addAssemblyFile(b.path("kernel/src/arch/x86_64/interrupts/stubs.s"));
+    if (test_double_fault) {
+        mod.addAssemblyFile(b.path("kernel/src/arch/x86_64/idt/df_trigger.s"));
+    }
+    return mod;
+}
+
 pub fn build(b: *std.Build) void {
     const x86 = std.Target.x86;
     const target = b.resolveTargetQuery(.{
@@ -18,6 +42,7 @@ pub fn build(b: *std.Build) void {
             .soft_float,
         }),
     });
+    const host_target = b.resolveTargetQuery(.{});
 
     // Consistent optimization mode across build system and script entrypoints:
     // uses documented Zig 0.17.1 `b.option` and `b.graph.release_mode` APIs,
@@ -39,23 +64,17 @@ pub fn build(b: *std.Build) void {
         .small => "ReleaseSmall",
     };
 
-    const kernel_mod = b.createModule(.{
-        .root_source_file = b.path("kernel/src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .code_model = .kernel,
-        .red_zone = false,
-    });
-
-    kernel_mod.addAssemblyFile(b.path("kernel/src/arch/x86_64/interrupts/stubs.s"));
-
+    // -------------------------------------------------------------------------
+    // 1. Production Subgraph (default `zig build`, `iso`, `run`, `debug`, `test-boot`)
+    //    Never includes `df_trigger.s`; installs strictly to `zig-out/bin/kernel.elf`.
+    // -------------------------------------------------------------------------
+    const kernel_mod = addKernelModule(b, target, optimize, false);
     const kernel = b.addExecutable(.{
         .name = "kernel.elf",
         .root_module = kernel_mod,
         .use_llvm = true,
         .use_lld = true,
     });
-
     kernel.setLinkerScript(b.path("kernel/linker.ld"));
     const install_kernel = b.addInstallArtifact(kernel, .{});
     b.getInstallStep().dependOn(&install_kernel.step);
@@ -73,6 +92,8 @@ pub fn build(b: *std.Build) void {
     const iso_cmd = b.addSystemCommand(&.{
         "bash",
         "scripts/package-iso.sh",
+        "--profile",
+        "prod",
         "--optimize",
         optimize_name,
     });
@@ -120,35 +141,93 @@ pub fn build(b: *std.Build) void {
     const boot_test_step = b.step("test-boot", "Run automated boot smoke test");
     boot_test_step.dependOn(&test_cmd.step);
 
-    // Host Unit Test Step
+    // -------------------------------------------------------------------------
+    // 2. Isolated Double Fault Test Subgraph (`iso-df-test`, `test-df`)
+    //    Structurally independent from `b.getInstallStep()` and production outputs;
+    //    writes exclusively to `zig-out/df-test/kernel-df-test.elf`, `build/df-test/iso_root`,
+    //    and `build/zig-os-df-test.iso`.
+    // -------------------------------------------------------------------------
+    const df_kernel_mod = addKernelModule(b, target, optimize, true);
+    const df_kernel = b.addExecutable(.{
+        .name = "kernel-df-test.elf",
+        .root_module = df_kernel_mod,
+        .use_llvm = true,
+        .use_lld = true,
+    });
+    df_kernel.setLinkerScript(b.path("kernel/linker.ld"));
+    const install_df_kernel = b.addInstallArtifact(df_kernel, .{
+        .dest_dir = .{ .override = .{ .custom = "df-test" } },
+    });
+
+    const log_df_optimize = b.addSystemCommand(&.{
+        "printf",
+        "[BUILD df-test] Optimization mode: %s\n",
+        optimize_name,
+    });
+    log_df_optimize.setName("log df-test optimize");
+    log_df_optimize.step.dependOn(&install_df_kernel.step);
+
+    const df_iso_cmd = b.addSystemCommand(&.{
+        "bash",
+        "scripts/package-iso.sh",
+        "--profile",
+        "df-test",
+        "--optimize",
+        optimize_name,
+    });
+    df_iso_cmd.setName("package df-test iso");
+    df_iso_cmd.step.dependOn(&log_df_optimize.step);
+    const df_iso_step = b.step("iso-df-test", "Build isolated Double Fault test ISO image");
+    df_iso_step.dependOn(&df_iso_cmd.step);
+
+    const test_df_cmd = b.addSystemCommand(&.{
+        "bash",
+        "scripts/lib/qemu-runner.sh",
+        "test-df",
+        "--optimize",
+        optimize_name,
+    });
+    test_df_cmd.setName("qemu test-df");
+    test_df_cmd.step.dependOn(df_iso_step);
+    const test_df_step = b.step("test-df", "Run isolated standalone Double Fault QEMU test");
+    test_df_step.dependOn(&test_df_cmd.step);
+
+    // -------------------------------------------------------------------------
+    // 3. Host Unit Test Subgraph (`zig build test`)
+    // -------------------------------------------------------------------------
     const test_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit_test.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     test_mod.addAnonymousImport("paging_math", .{
         .root_source_file = b.path("kernel/src/mm/paging_math.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     test_mod.addAnonymousImport("physical_math", .{
         .root_source_file = b.path("kernel/src/mm/physical_math.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     test_mod.addAnonymousImport("page_fault", .{
         .root_source_file = b.path("kernel/src/arch/x86_64/interrupts/page_fault.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     test_mod.addAnonymousImport("heap_layout", .{
         .root_source_file = b.path("kernel/src/mm/heap_layout.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
-    test_mod.addAnonymousImport("sse", .{
-        .root_source_file = b.path("kernel/src/arch/x86_64/sse.zig"),
-        .target = b.resolveTargetQuery(.{}),
+    test_mod.addAnonymousImport("gdt_model", .{
+        .root_source_file = b.path("kernel/src/arch/x86_64/gdt/gdt_model.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    test_mod.addAnonymousImport("kernel_panic", .{
+        .root_source_file = b.path("kernel/src/panic.zig"),
+        .target = host_target,
         .optimize = optimize,
     });
     const unit_tests = b.addTest(.{
@@ -159,12 +238,12 @@ pub fn build(b: *std.Build) void {
     // Stateful PMM Core Host Unit Tests (wired into the same `zig build test` step)
     const pmm_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/pmm_test.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     pmm_test_mod.addAnonymousImport("physical_core", .{
         .root_source_file = b.path("kernel/src/mm/physical_core.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     const pmm_tests = b.addTest(.{
@@ -176,12 +255,12 @@ pub fn build(b: *std.Build) void {
     // Stateful VMM Core Host Unit Tests (wired into the same `zig build test` step)
     const vmm_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/vmm_test.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     vmm_test_mod.addAnonymousImport("virtual_core", .{
         .root_source_file = b.path("kernel/src/mm/virtual_core.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     const vmm_tests = b.addTest(.{
@@ -193,12 +272,12 @@ pub fn build(b: *std.Build) void {
     // Stateful Heap Core Host Unit Tests (wired into the same `zig build test` step)
     const heap_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/heap_test.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     heap_test_mod.addAnonymousImport("heap_core", .{
         .root_source_file = b.path("kernel/src/mm/heap_core.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     const heap_tests = b.addTest(.{
@@ -207,15 +286,15 @@ pub fn build(b: *std.Build) void {
     });
     const run_heap_tests = b.addRunArtifact(heap_tests);
 
-    // Interrupt Vector Policy & Static Forbidden-INT Host Tests (F-03)
+    // Interrupt Vector Policy, DF State Machine, & Static Forbidden-INT Host Tests
     const vector_policy_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/vector_policy_test.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     vector_policy_test_mod.addAnonymousImport("vectors", .{
         .root_source_file = b.path("kernel/src/arch/x86_64/interrupts/vectors.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = host_target,
         .optimize = optimize,
     });
     const vector_policy_opts = b.addOptions();

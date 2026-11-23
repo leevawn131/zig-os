@@ -45,23 +45,24 @@ Every status assertion, milestone claim, and documentation update must utilize o
 
 ### 4.1 Host-Side Unit Tests (`tests/unit_test.zig`, `tests/pmm_test.zig`, `tests/vmm_test.zig`, `tests/heap_test.zig`, `tests/vector_policy_test.zig`)
 - **Execution Command**: `zig build test`
-- **Scope**: Memory calculations, paging address decomposition, bitfield encoding/decoding, bitmap frame indexing, allocator chunk header integrity, interrupt vector reservation & PIC offset policy (`vectors.zig`), and static source scanning of `kernel/` (`.zig`, `.s`, `.S`, `.asm`) to forbid `int <n>` on error-code and non-breakpoint reserved exception vectors.
+- **Scope**: Memory calculations, paging address decomposition, bitfield encoding/decoding, bitmap frame indexing, allocator chunk header integrity, pure GDT/TSS descriptor encoding (`gdt_model.zig`), bounded UART TX polling (`serial.waitForTxReady`), overflow-safe frame range validation (`isFrameWithinStack`, `isFrameDisjointFromStack`), atomic CAS `DfStateMachine` + `#DF` forensics (`vectors.zig`), interrupt vector reservation & PIC offset policy, and static source scanning of `kernel/` (`.zig`, `.s`, `.S`, `.asm`) to forbid `int <n>` on error-code and non-breakpoint reserved exception vectors.
 - **Limitation**: Executes under host Linux virtual memory. Does **not** verify privileged CPU instructions, hardware interrupts, or physical MMIO.
 
 ### 4.2 In-Kernel Runtime Self-Tests
 - **Scope**: Executed during early boot sequence before handing off to userland:
   - Legacy PIC remap & mask verification: `pic.remapAndMask()` remaps 8259 PICs to `0x20–0x2F` and verifies IMRs read back `0xFF`/`0xFF` (`[PIC]` marker).
-  - IDT gate validation: `idt.validateExceptionGates()` verifies `0x8E` (Present, DPL=0, 64-bit Interrupt Gate), current kernel CS, cleared reserved fields, and distinct exception stub addresses across vectors `0..31` (and all 256 gates).
-  - IDT self-test: Software interrupt (`int $3`) dispatch and return.
-  - Page Fault self-test: Controlled `#PF` test hook validating CR2 linear address and error flags.
+  - Kernel-owned GDT/TSS/IST validation: `gdt.testGdtAndTss()` verifies `sgdt`, `str() == 0x48`, post-load Accessed (`0x9B`/`0x93`) & Busy (`0x8B`) bits, active selectors (`0x28`/`0x30`), and three disjoint 16-byte-aligned IST stacks (`[GDT]` marker).
+  - IDT dispatch & IST stack-switch self-tests: `idt.testExceptionDispatch()` (`ist = 0`) and `idt.testIstStackSwitch()` (`IST1`–`IST3`) trigger controlled `int $3` with zero RIP skip adjustment, verifying next-instruction continuation, exact pre/post `RSP`, and overflow-safe frame placement before `idt.enableIstGates()`.
+  - IDT gate validation: `idt.validateExceptionGates()` verifies `0x8E` (Present, DPL=0, 64-bit Interrupt Gate), expected IST indices (`8->1, 2->2, 18->3`, others `0`), kernel CS `0x28`, cleared reserved fields, and distinct exception stub addresses across vectors `0..31` (and all 256 gates).
+  - Page Fault self-test: Controlled `#PF` test hook validating CR2 linear address and error flags (exclusively on Vector 14).
   - PMM self-test: Single and multi-page allocation, free, re-allocation, and double-free rejection.
   - VMM self-test: Virtual-to-physical translation (`virtToPhys`), dynamic table allocation, page unmapping, and TLB flush (`invlpg`).
   - Heap self-test: Small/large allocations, chunk alignment, header canary verification (`0xCAFEBABE`), and free coalescing.
 - **Safety Policy**: Self-tests must be strictly non-destructive and must not crash or halt the system during normal production boot.
 
-### 4.3 Headless QEMU Smoke Tests (`scripts/test-boot.sh`, `tests/test_boot.py`)
-- **Execution Command**: `./scripts/test-boot.sh` or `python3 tests/test_boot.py`
-- **Scope**: Boots `build/zig-os.iso` in headless QEMU, captures COM1 serial output, asserts required boot strings, and monitors process state to confirm quiescent CPU halt.
+### 4.3 Headless QEMU Smoke Tests (`scripts/test-boot.sh`, `tests/test_boot.py`) & Isolated `test-df`
+- **Production Boot (`./scripts/test-boot.sh` or `python3 tests/test_boot.py`)**: Boots `build/zig-os.iso` (F-14 3-way SHA-256 verified) in headless QEMU, captures COM1 serial output, asserts required boot strings (`[GDT]`, `[IDT] 256 interrupt gates configured and verified.`, etc.), and monitors process state to confirm stability under `-no-reboot`.
+- **Isolated Double Fault Test (`zig build test-df`)**: Uses a strictly isolated build/ISO/provenance pipeline (`zig-out/df-test/kernel-df-test.elf`, `build/df-test/iso_root`, `build/zig-os-df-test.iso`, never overwriting production artifacts) to trigger a real unmapped-stack `#PF -> #DF` escalation onto `IST1`. Verifies serial forensic evidence (`[DF-TEST] PASS`, Vector 8 `#DF`, `Error Code: 0`, `CR2`/`RSP` window), process survival (`kill -0`), VM runstate (QMP `query-status`), and guest BSP halt state (`HLT=1`, `CPL=0`, `TR=0048`) via an exact QEMU `10.2.1` version-validated multi-line `CPU#0` HMP parser.
 - **Criteria for Success**:
   1. All expected serial markers are present in exact chronological sequence.
   2. QEMU executes without triggering triple faults, reboot loops, or unhandled CPU exceptions.
